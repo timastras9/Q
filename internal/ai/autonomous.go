@@ -619,6 +619,7 @@ REMAINING ACTIONS:
 - subdomain_enum: enumerate subdomains (target=domain.com, timeout=60, threads=10)
 - ssl_scan: analyze SSL/TLS config (target=host:port, checks certs, protocols, ciphers)
 - api_fuzz: fuzz REST/GraphQL APIs (target=http://ip:port/api, auth_token=token, cookie=session)
+- crack_hash: crack password hashes (target=hash_value, hash_type=md5|sha1|sha256|ntlm, tool=john|hashcat)
 - complete: all done
 
 Use EXPLOIT DATABASE RECOMMENDATIONS above to prioritize high-confidence exploits.
@@ -678,6 +679,7 @@ Reply JSON:
 		"lfi_exploit": true, "ssrf_exploit": true, "file_upload": true,
 		"nuclei_scan": true, "xss_scan": true, "nikto_scan": true,
 		"subdomain_enum": true, "ssl_scan": true, "api_fuzz": true,
+		"crack_hash": true,
 	}
 	if !validActions[decision.Action] {
 		decision.Action = "complete"

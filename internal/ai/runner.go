@@ -234,6 +234,8 @@ func (r *AutoRunner) executeAction(ctx context.Context, decision *AIDecision) (*
 		return r.actionSSLScan(ctx, action, decision)
 	case "api_fuzz":
 		return r.actionAPIFuzz(ctx, action, decision)
+	case "crack_hash":
+		return r.actionCrackHash(ctx, action, decision)
 	default:
 		action.Result = fmt.Sprintf("Unknown action: %s", decision.Action)
 		action.Success = false
@@ -2094,4 +2096,122 @@ func (r *AutoRunner) actionAPIFuzz(ctx context.Context, action *Action, decision
 	action.Success = result.Success
 
 	return action, nil
+}
+
+// actionCrackHash attempts to crack password hashes using john/hashcat
+func (r *AutoRunner) actionCrackHash(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	if err := r.framework.Use("auxiliary/analyze/crack_hash"); err != nil {
+		action.Result = fmt.Sprintf("Module error: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	module := r.framework.Current()
+
+	// Get hash from options or target
+	hash := getOpt(decision.Options, "hash")
+	if hash == "" {
+		hash = decision.Target
+	}
+
+	hashType := getOpt(decision.Options, "hash_type")
+	if hashType == "" {
+		// Auto-detect hash type by length
+		hashType = detectHashType(hash)
+	}
+
+	module.SetOption("HASH", hash)
+	module.SetOption("HASH_TYPE", hashType)
+
+	if wordlist := getOpt(decision.Options, "wordlist"); wordlist != "" {
+		module.SetOption("WORDLIST", wordlist)
+	}
+	if tool := getOpt(decision.Options, "tool"); tool != "" {
+		module.SetOption("TOOL", tool)
+	}
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("Hash cracking failed: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	// Record cracked credentials
+	if result.Success {
+		for _, cred := range result.Credentials {
+			cf := CredentialFind{
+				Password: cred.Password,
+				Hash:     cred.Hash,
+				Service:  "cracked_hash",
+				Target:   cred.Type,
+			}
+			r.state.Credentials = append(r.state.Credentials, cf)
+
+			if r.callbacks.OnCredential != nil {
+				r.callbacks.OnCredential(cf)
+			}
+		}
+
+		// Add as finding
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "cracked_password",
+			Severity:    "high",
+			Target:      hash,
+			Description: fmt.Sprintf("Password hash cracked: %s", result.Credentials[0].Password),
+			Evidence:    result.Output,
+			Timestamp:   time.Now(),
+		})
+
+		if r.callbacks.OnFinding != nil {
+			r.callbacks.OnFinding(Finding{
+				Type:        "cracked_password",
+				Severity:    "high",
+				Target:      hash,
+				Description: "Password hash successfully cracked",
+			})
+		}
+	}
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	return action, nil
+}
+
+// detectHashType attempts to identify hash type by length and format
+func detectHashType(hash string) string {
+	hash = strings.TrimSpace(hash)
+
+	// Remove common prefixes
+	if strings.HasPrefix(hash, "$1$") {
+		return "md5crypt"
+	}
+	if strings.HasPrefix(hash, "$5$") {
+		return "sha256crypt"
+	}
+	if strings.HasPrefix(hash, "$6$") {
+		return "sha512crypt"
+	}
+	if strings.HasPrefix(hash, "$2a$") || strings.HasPrefix(hash, "$2b$") {
+		return "bcrypt"
+	}
+
+	// Detect by length (for raw hashes)
+	switch len(hash) {
+	case 32:
+		return "md5"
+	case 40:
+		return "sha1"
+	case 64:
+		return "sha256"
+	case 128:
+		return "sha512"
+	default:
+		// Check if it looks like NTLM (32 hex chars, uppercase usually)
+		if len(hash) == 32 {
+			return "ntlm"
+		}
+		return "md5" // Default fallback
+	}
 }
