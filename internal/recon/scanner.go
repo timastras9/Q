@@ -81,7 +81,7 @@ func (s *Scanner) SetConcurrency(c int) {
 func DefaultPorts() []int {
 	return []int{
 		21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 143, 443, 445, 993, 995,
-		1433, 1521, 1723, 3306, 3389, 5432, 5900, 5985, 6379, 8000, 8080, 8443, 8888, 9090, 27017,
+		1433, 1521, 1723, 2222, 3306, 3389, 5432, 5900, 5985, 6379, 8000, 8080, 8443, 8888, 9090, 22022, 27017,
 	}
 }
 
@@ -433,6 +433,7 @@ func identifyService(port int) Service {
 		995:   {Name: "pop3s"},
 		1433:  {Name: "mssql"},
 		1521:  {Name: "oracle"},
+		2222:  {Name: "ssh"},  // Common alternate SSH port
 		3306:  {Name: "mysql"},
 		3389:  {Name: "rdp"},
 		5432:  {Name: "postgresql"},
@@ -441,6 +442,7 @@ func identifyService(port int) Service {
 		6379:  {Name: "redis"},
 		8080:  {Name: "http-proxy"},
 		8443:  {Name: "https-alt"},
+		22022: {Name: "ssh"}, // Common alternate SSH port
 		27017: {Name: "mongodb"},
 	}
 
