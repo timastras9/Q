@@ -373,6 +373,19 @@ func (a *AutoPentester) GetNextAction(ctx context.Context, state *PentestState) 
 		}
 	}
 
+	// Phase 2b: SSL/TLS analysis on all HTTPS ports (443, 8443) and HTTP ports
+	for _, httpPort := range httpPorts {
+		sslTarget := fmt.Sprintf("%s:%d", target, httpPort)
+		if !completedActions[fmt.Sprintf("ssl_scan:%s", sslTarget)] {
+			return &AIDecision{
+				Action:    "ssl_scan",
+				Target:    sslTarget,
+				Reasoning: fmt.Sprintf("SSL/TLS configuration analysis on port %d", httpPort),
+				RiskLevel: "low",
+			}, nil
+		}
+	}
+
 	// Phase 3: Directory scan all HTTP ports
 	for _, httpPort := range httpPorts {
 		webTarget := fmt.Sprintf("http://%s:%d", target, httpPort)
@@ -382,6 +395,19 @@ func (a *AutoPentester) GetNextAction(ctx context.Context, state *PentestState) 
 				Target:    webTarget,
 				Reasoning: fmt.Sprintf("Directory enumeration on port %d", httpPort),
 				RiskLevel: "low",
+			}, nil
+		}
+	}
+
+	// Phase 3b: API fuzzing on all HTTP ports (test REST/GraphQL endpoints)
+	for _, httpPort := range httpPorts {
+		webTarget := fmt.Sprintf("http://%s:%d", target, httpPort)
+		if !completedActions[fmt.Sprintf("api_fuzz:%s", webTarget)] {
+			return &AIDecision{
+				Action:    "api_fuzz",
+				Target:    webTarget,
+				Reasoning: fmt.Sprintf("API endpoint fuzzing on port %d", httpPort),
+				RiskLevel: "medium",
 			}, nil
 		}
 	}
