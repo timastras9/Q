@@ -516,6 +516,9 @@ REMAINING ACTIONS:
 - service_scan: banner grab (target=ip:port)
 - ftp_anon: check anonymous FTP (target=ip)
 - redis_check: check unauthenticated Redis (target=ip)
+- lfi_exploit: local file inclusion (target=http://ip:port, uri=/page.php?file=)
+- ssrf_exploit: server-side request forgery (target=http://ip:port, uri=/fetch?url=)
+- file_upload: malicious file upload (target=http://ip:port, uri=/upload.php)
 - reverse_shell: generate reverse shell payloads (target=ip, lhost=attacker_ip, lport=port)
 - complete: all done
 
@@ -573,6 +576,7 @@ Reply JSON:
 		"http_login": true, "redis_check": true, "cmd_inject": true,
 		"sqli_exploit": true, "complete": true, "full_scan": true,
 		"ssh_recon": true, "reverse_shell": true, "cred_spray": true,
+		"lfi_exploit": true, "ssrf_exploit": true, "file_upload": true,
 	}
 	if !validActions[decision.Action] {
 		decision.Action = "complete"

@@ -216,6 +216,12 @@ func (r *AutoRunner) executeAction(ctx context.Context, decision *AIDecision) (*
 		return r.actionReverseShell(ctx, action, decision)
 	case "cred_spray":
 		return r.actionCredSpray(ctx, action, decision)
+	case "lfi_exploit":
+		return r.actionLFI(ctx, action, decision)
+	case "ssrf_exploit":
+		return r.actionSSRF(ctx, action, decision)
+	case "file_upload":
+		return r.actionFileUpload(ctx, action, decision)
 	default:
 		action.Result = fmt.Sprintf("Unknown action: %s", decision.Action)
 		action.Success = false
@@ -1330,6 +1336,248 @@ func (r *AutoRunner) actionCredSpray(ctx context.Context, action *Action, decisi
 	action.Success = result.Success
 	action.Data["service"] = service
 	action.Data["username"] = username
+
+	return action, nil
+}
+
+// actionLFI tests for Local File Inclusion vulnerabilities
+func (r *AutoRunner) actionLFI(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	if err := r.framework.Use("exploit/multi/http/lfi"); err != nil {
+		action.Result = fmt.Sprintf("Module error: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	module := r.framework.Current()
+
+	// Parse target URL
+	target := decision.Target
+	port := "80"
+
+	if strings.HasPrefix(target, "http://") {
+		target = strings.TrimPrefix(target, "http://")
+	} else if strings.HasPrefix(target, "https://") {
+		target = strings.TrimPrefix(target, "https://")
+		module.SetOption("SSL", "true")
+		port = "443"
+	}
+
+	if strings.Contains(target, ":") {
+		parts := strings.Split(target, ":")
+		target = parts[0]
+		portPath := parts[1]
+		if idx := strings.Index(portPath, "/"); idx != -1 {
+			port = portPath[:idx]
+		} else {
+			port = portPath
+		}
+	}
+
+	module.SetOption("RHOSTS", target)
+	module.SetOption("RPORT", port)
+
+	if uri := getOpt(decision.Options, "uri"); uri != "" {
+		module.SetOption("TARGETURI", uri)
+	}
+	if cookie := getOpt(decision.Options, "cookie"); cookie != "" {
+		module.SetOption("COOKIE", cookie)
+	}
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("LFI exploit failed: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	if result.Success {
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "local_file_inclusion",
+			Severity:    "high",
+			Target:      decision.Target,
+			Description: "Local File Inclusion - Sensitive files readable",
+			Evidence:    result.Output,
+			Remediation: "Validate and sanitize file path inputs, use allowlists for includable files",
+			Timestamp:   time.Now(),
+		})
+
+		if r.callbacks.OnFinding != nil {
+			r.callbacks.OnFinding(Finding{
+				Type:        "local_file_inclusion",
+				Severity:    "high",
+				Target:      decision.Target,
+				Description: "LFI vulnerability found",
+			})
+		}
+	}
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	return action, nil
+}
+
+// actionSSRF tests for Server-Side Request Forgery vulnerabilities
+func (r *AutoRunner) actionSSRF(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	if err := r.framework.Use("exploit/multi/http/ssrf"); err != nil {
+		action.Result = fmt.Sprintf("Module error: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	module := r.framework.Current()
+
+	// Parse target URL
+	target := decision.Target
+	port := "80"
+
+	if strings.HasPrefix(target, "http://") {
+		target = strings.TrimPrefix(target, "http://")
+	} else if strings.HasPrefix(target, "https://") {
+		target = strings.TrimPrefix(target, "https://")
+		module.SetOption("SSL", "true")
+		port = "443"
+	}
+
+	if strings.Contains(target, ":") {
+		parts := strings.Split(target, ":")
+		target = parts[0]
+		portPath := parts[1]
+		if idx := strings.Index(portPath, "/"); idx != -1 {
+			port = portPath[:idx]
+		} else {
+			port = portPath
+		}
+	}
+
+	module.SetOption("RHOSTS", target)
+	module.SetOption("RPORT", port)
+
+	if uri := getOpt(decision.Options, "uri"); uri != "" {
+		module.SetOption("TARGETURI", uri)
+	}
+	if cookie := getOpt(decision.Options, "cookie"); cookie != "" {
+		module.SetOption("COOKIE", cookie)
+	}
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("SSRF exploit failed: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	if result.Success {
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "ssrf",
+			Severity:    "high",
+			Target:      decision.Target,
+			Description: "Server-Side Request Forgery - Internal services accessible",
+			Evidence:    result.Output,
+			Remediation: "Validate and sanitize URLs, implement allowlists, block internal IP ranges",
+			Timestamp:   time.Now(),
+		})
+
+		if r.callbacks.OnFinding != nil {
+			r.callbacks.OnFinding(Finding{
+				Type:        "ssrf",
+				Severity:    "high",
+				Target:      decision.Target,
+				Description: "SSRF vulnerability found",
+			})
+		}
+	}
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	return action, nil
+}
+
+// actionFileUpload tests for insecure file upload vulnerabilities
+func (r *AutoRunner) actionFileUpload(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	if err := r.framework.Use("exploit/multi/http/file_upload"); err != nil {
+		action.Result = fmt.Sprintf("Module error: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	module := r.framework.Current()
+
+	// Parse target URL
+	target := decision.Target
+	port := "80"
+
+	if strings.HasPrefix(target, "http://") {
+		target = strings.TrimPrefix(target, "http://")
+	} else if strings.HasPrefix(target, "https://") {
+		target = strings.TrimPrefix(target, "https://")
+		module.SetOption("SSL", "true")
+		port = "443"
+	}
+
+	if strings.Contains(target, ":") {
+		parts := strings.Split(target, ":")
+		target = parts[0]
+		portPath := parts[1]
+		if idx := strings.Index(portPath, "/"); idx != -1 {
+			port = portPath[:idx]
+		} else {
+			port = portPath
+		}
+	}
+
+	module.SetOption("RHOSTS", target)
+	module.SetOption("RPORT", port)
+
+	if uri := getOpt(decision.Options, "uri"); uri != "" {
+		module.SetOption("TARGETURI", uri)
+	}
+	if uploadDir := getOpt(decision.Options, "uploaddir"); uploadDir != "" {
+		module.SetOption("UPLOADDIR", uploadDir)
+	}
+	if cookie := getOpt(decision.Options, "cookie"); cookie != "" {
+		module.SetOption("COOKIE", cookie)
+	}
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("File upload exploit failed: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	if result.Success {
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "file_upload_rce",
+			Severity:    "critical",
+			Target:      decision.Target,
+			Description: "Insecure File Upload - Web shell uploaded, RCE achieved",
+			Evidence:    result.Output,
+			Remediation: "Validate file types, use allowlists, store uploads outside webroot, rename files",
+			Timestamp:   time.Now(),
+		})
+
+		// Add session for RCE
+		r.state.Sessions = append(r.state.Sessions, SessionInfo{
+			ID:     fmt.Sprintf("webshell-%d", len(r.state.Sessions)+1),
+			Type:   "webshell",
+			Target: decision.Target,
+			User:   "www-data",
+		})
+
+		if r.callbacks.OnFinding != nil {
+			r.callbacks.OnFinding(Finding{
+				Type:        "file_upload_rce",
+				Severity:    "critical",
+				Target:      decision.Target,
+				Description: "File upload RCE achieved",
+			})
+		}
+	}
+
+	action.Result = result.Output
+	action.Success = result.Success
 
 	return action, nil
 }
