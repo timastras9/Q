@@ -72,6 +72,28 @@ class ProfessionalReportGenerator {
         });
     }
 
+    // Smart page break - only add page if we need space
+    ensureSpace(neededSpace) {
+        if (this.currentY > this.pageHeight - neededSpace - 60) {
+            this.doc.addPage();
+            this.currentY = 130;
+            this.needsHeader = true;
+            return true;
+        }
+        return false;
+    }
+
+    // Start a new section - only add page if current page has content
+    startSection(title) {
+        // Only add new page if we've used more than header area
+        if (this.currentY > 140) {
+            this.doc.addPage();
+        }
+        this.addPageHeader(title);
+        this.currentY = 130;
+        this.needsHeader = false;
+    }
+
     // ============================================
     // COVER PAGE
     // ============================================
@@ -221,8 +243,7 @@ class ProfessionalReportGenerator {
 
             y += 35;
         });
-
-        doc.addPage();
+        // No page break - next section will handle it
     }
 
     // ============================================
@@ -231,7 +252,7 @@ class ProfessionalReportGenerator {
     addExecutiveSummary() {
         const { doc, scanData } = this;
 
-        this.addPageHeader('EXECUTIVE SUMMARY');
+        this.startSection('EXECUTIVE SUMMARY');
 
         const stats = this.getStats();
         let y = 130;
@@ -320,8 +341,7 @@ class ProfessionalReportGenerator {
                    70, y + 32, { width: this.contentWidth - 40 }
                );
         }
-
-        doc.addPage();
+        // No page break - next section will handle it
     }
 
     // ============================================
@@ -330,7 +350,7 @@ class ProfessionalReportGenerator {
     addRiskOverview() {
         const { doc } = this;
 
-        this.addPageHeader('RISK OVERVIEW');
+        this.startSection('RISK OVERVIEW');
 
         const stats = this.getStats();
         let y = 130;
@@ -427,8 +447,7 @@ class ProfessionalReportGenerator {
                 y += 60;
             }
         });
-
-        doc.addPage();
+        // No page break - next section will handle it
     }
 
     // ============================================
@@ -437,14 +456,13 @@ class ProfessionalReportGenerator {
     addDetailedFindings() {
         const { doc } = this;
 
-        this.addPageHeader('DETAILED FINDINGS');
+        this.startSection('DETAILED FINDINGS');
 
         const vulns = this.scanData.vulnerabilities || [];
         if (vulns.length === 0) {
             doc.fontSize(11)
                .fillColor(colors.text)
                .text('No vulnerabilities were identified during this assessment.', 50, 130);
-            doc.addPage();
             return;
         }
 
@@ -475,49 +493,49 @@ class ProfessionalReportGenerator {
             y += 40;
 
             items.forEach((vuln, index) => {
-                if (y > this.pageHeight - 120) {
+                // More aggressive page break check (only 60px from bottom)
+                if (y > this.pageHeight - 80) {
                     doc.addPage();
                     this.addPageHeader('DETAILED FINDINGS (CONTINUED)');
                     y = 130;
                 }
 
-                // Finding card
-                doc.roundedRect(50, y, this.contentWidth, 70, 3)
+                // Compact finding card (55px height)
+                doc.roundedRect(50, y, this.contentWidth, 55, 3)
                    .fillAndStroke(colors.background, colors.border);
 
-                // Finding number
-                doc.circle(65, y + 15, 10).fill(sevColor);
-                doc.fontSize(9)
+                // Finding number badge
+                doc.circle(65, y + 12, 8).fill(sevColor);
+                doc.fontSize(8)
                    .fillColor('#ffffff')
-                   .text((index + 1).toString(), 60, y + 11, { width: 10, align: 'center' });
+                   .text((index + 1).toString(), 58, y + 9, { width: 14, align: 'center' });
 
                 // Finding title
-                doc.fontSize(11)
+                doc.fontSize(10)
                    .fillColor(colors.primary)
                    .font('Helvetica-Bold')
-                   .text(vuln.type || vuln.name || 'Unknown Vulnerability', 85, y + 10, { width: this.contentWidth - 50 })
+                   .text(vuln.type || vuln.name || 'Unknown Vulnerability', 82, y + 8, { width: this.contentWidth - 50 })
                    .font('Helvetica');
 
                 // Target
-                doc.fontSize(9)
+                doc.fontSize(8)
                    .fillColor(colors.lightText)
-                   .text(`Target: ${vuln.target || 'N/A'}`, 85, y + 28);
+                   .text(`Target: ${vuln.target || 'N/A'}`, 82, y + 23);
 
-                // Description
+                // Description (shorter)
                 if (vuln.description) {
-                    doc.fontSize(9)
+                    doc.fontSize(8)
                        .fillColor(colors.text)
-                       .text(vuln.description.substring(0, 150) + (vuln.description.length > 150 ? '...' : ''),
-                             85, y + 45, { width: this.contentWidth - 50 });
+                       .text(vuln.description.substring(0, 120) + (vuln.description.length > 120 ? '...' : ''),
+                             82, y + 36, { width: this.contentWidth - 45 });
                 }
 
-                y += 85;
+                y += 62;
             });
 
             y += 15;
         });
-
-        doc.addPage();
+        // No page break - next section will handle it
     }
 
     // ============================================
@@ -526,14 +544,13 @@ class ProfessionalReportGenerator {
     addTestResults() {
         const { doc } = this;
 
-        this.addPageHeader('TEST RESULTS');
+        this.startSection('TEST RESULTS');
 
         const tests = this.scanData.tests || [];
         if (tests.length === 0) {
             doc.fontSize(11)
                .fillColor(colors.text)
                .text('No test results recorded.', 50, 130);
-            doc.addPage();
             return;
         }
 
@@ -553,55 +570,52 @@ class ProfessionalReportGenerator {
 
         y += 70;
 
-        // Test list
+        // Test list - compact table format
         tests.forEach((test, index) => {
-            if (y > this.pageHeight - 100) {
+            if (y > this.pageHeight - 60) {
                 doc.addPage();
                 this.addPageHeader('TEST RESULTS (CONTINUED)');
                 y = 130;
             }
 
-            const cardHeight = test.output && test.output.length > 0 ? 75 : 50;
-
-            doc.roundedRect(50, y, this.contentWidth, cardHeight, 3)
-               .fillAndStroke('#ffffff', colors.border);
+            // Compact row (40px height)
+            doc.roundedRect(50, y, this.contentWidth, 38, 2)
+               .fillAndStroke(index % 2 === 0 ? '#ffffff' : colors.background, colors.border);
 
             // Status indicator
-            doc.rect(50, y, 4, cardHeight).fill(test.success ? colors.success : colors.danger);
+            doc.rect(50, y, 4, 38).fill(test.success ? colors.success : colors.danger);
 
             // Test name
-            doc.fontSize(10)
+            doc.fontSize(9)
                .fillColor(colors.primary)
                .font('Helvetica-Bold')
-               .text(this.formatTestName(test.action || test.name), 65, y + 10)
+               .text(this.formatTestName(test.action || test.name), 62, y + 6, { width: 150 })
                .font('Helvetica');
 
             // Target
-            doc.fontSize(9)
-               .fillColor(colors.lightText)
-               .text(test.target || 'N/A', 65, y + 26);
-
-            // Status badge
-            const statusText = test.success ? 'PASSED' : 'FAILED';
-            const statusColor = test.success ? colors.success : colors.danger;
-            const badgeX = this.pageWidth - 120;
-            doc.roundedRect(badgeX, y + 10, 60, 18, 9).fill(statusColor);
             doc.fontSize(8)
-               .fillColor('#ffffff')
-               .text(statusText, badgeX, y + 15, { width: 60, align: 'center' });
+               .fillColor(colors.lightText)
+               .text((test.target || 'N/A').substring(0, 40), 62, y + 20, { width: 180 });
 
-            // Output preview
+            // Output preview (inline)
             if (test.output && test.output.length > 0) {
-                doc.fontSize(8)
+                doc.fontSize(7)
                    .fillColor(colors.lightText)
-                   .text(test.output.substring(0, 100) + (test.output.length > 100 ? '...' : ''),
-                         65, y + 45, { width: this.contentWidth - 100 });
+                   .text(test.output.substring(0, 60) + '...', 250, y + 12, { width: 200 });
             }
 
-            y += cardHeight + 8;
-        });
+            // Status badge
+            const statusText = test.success ? 'PASS' : 'FAIL';
+            const statusColor = test.success ? colors.success : colors.danger;
+            const badgeX = this.pageWidth - 100;
+            doc.roundedRect(badgeX, y + 10, 45, 16, 8).fill(statusColor);
+            doc.fontSize(7)
+               .fillColor('#ffffff')
+               .text(statusText, badgeX, y + 14, { width: 45, align: 'center' });
 
-        doc.addPage();
+            y += 42;
+        });
+        // No page break - next section will handle it
     }
 
     // ============================================
@@ -610,7 +624,7 @@ class ProfessionalReportGenerator {
     addCredentialsSection() {
         const { doc } = this;
 
-        this.addPageHeader('EXTRACTED CREDENTIALS');
+        this.startSection('EXTRACTED CREDENTIALS');
 
         const creds = this.scanData.credentials || [];
         let y = 130;
@@ -619,7 +633,6 @@ class ProfessionalReportGenerator {
             doc.fontSize(11)
                .fillColor(colors.text)
                .text('No credentials were extracted during this assessment.', 50, y);
-            doc.addPage();
             return;
         }
 
@@ -685,8 +698,7 @@ class ProfessionalReportGenerator {
 
             y += 30;
         });
-
-        doc.addPage();
+        // No page break - next section will handle it
     }
 
     // ============================================
@@ -695,14 +707,14 @@ class ProfessionalReportGenerator {
     addRecommendations() {
         const { doc } = this;
 
-        this.addPageHeader('RECOMMENDATIONS');
+        this.startSection('RECOMMENDATIONS');
 
         let y = 130;
 
         const recommendations = this.generateRecommendations();
 
         recommendations.forEach((rec, index) => {
-            if (y > this.pageHeight - 120) {
+            if (y > this.pageHeight - 80) {
                 doc.addPage();
                 this.addPageHeader('RECOMMENDATIONS (CONTINUED)');
                 y = 130;
@@ -715,38 +727,37 @@ class ProfessionalReportGenerator {
                 'Low': colors.low
             };
 
-            // Card
-            doc.roundedRect(50, y, this.contentWidth, 80, 5)
+            // Compact card (60px)
+            doc.roundedRect(50, y, this.contentWidth, 58, 3)
                .fillAndStroke('#ffffff', colors.border);
 
             // Priority badge
-            doc.roundedRect(55, y + 5, 70, 20, 10)
+            doc.roundedRect(55, y + 5, 55, 16, 8)
                .fill(priorityColors[rec.priority] || colors.info);
-            doc.fontSize(8)
+            doc.fontSize(7)
                .fillColor('#ffffff')
-               .text(rec.priority.toUpperCase(), 55, y + 11, { width: 70, align: 'center' });
+               .text(rec.priority.toUpperCase(), 55, y + 10, { width: 55, align: 'center' });
 
             // Number
-            doc.fontSize(20)
+            doc.fontSize(16)
                .fillColor(colors.border)
-               .text((index + 1).toString().padStart(2, '0'), this.pageWidth - 100, y + 10);
+               .text((index + 1).toString().padStart(2, '0'), this.pageWidth - 90, y + 8);
 
             // Title
-            doc.fontSize(12)
+            doc.fontSize(10)
                .fillColor(colors.primary)
                .font('Helvetica-Bold')
-               .text(rec.title, 65, y + 32)
+               .text(rec.title, 120, y + 8, { width: this.contentWidth - 100 })
                .font('Helvetica');
 
             // Description
-            doc.fontSize(9)
+            doc.fontSize(8)
                .fillColor(colors.text)
-               .text(rec.description, 65, y + 50, { width: this.contentWidth - 40 });
+               .text(rec.description.substring(0, 150), 55, y + 28, { width: this.contentWidth - 30 });
 
-            y += 95;
+            y += 65;
         });
-
-        doc.addPage();
+        // No page break - next section will handle it
     }
 
     // ============================================
@@ -755,7 +766,7 @@ class ProfessionalReportGenerator {
     addAppendix() {
         const { doc } = this;
 
-        this.addPageHeader('APPENDIX');
+        this.startSection('APPENDIX');
 
         let y = 130;
 
@@ -839,7 +850,7 @@ class ProfessionalReportGenerator {
                .text(
                    `Page ${i} of ${pages.count - 1}`,
                    50, this.pageHeight - 30,
-                   { width: this.contentWidth, align: 'right' }
+                   { width: this.contentWidth, align: 'right', lineBreak: false }
                );
         }
     }
@@ -853,11 +864,12 @@ class ProfessionalReportGenerator {
 
             doc.fontSize(8)
                .fillColor(colors.lightText)
-               .text('CONFIDENTIAL', 50, this.pageHeight - 30);
+               .text('CONFIDENTIAL', 50, this.pageHeight - 30, { lineBreak: false });
 
             doc.text(`PentestAI Report - ${this.scanData.target}`, 50, this.pageHeight - 30, {
                 width: this.contentWidth,
-                align: 'center'
+                align: 'center',
+                lineBreak: false
             });
         }
     }
