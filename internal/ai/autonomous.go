@@ -216,14 +216,25 @@ func (a *AutoPentester) GetNextAction(ctx context.Context, state *PentestState) 
 	// Create compact state summary to minimize tokens
 	summary := a.compactState(state)
 
-	prompt := fmt.Sprintf(`Pentest AI. Pick next action.
+	prompt := fmt.Sprintf(`Pentest AI. Pick next action. Goal: gain access and find vulns.
 
 STATE:%s
 
-ACTIONS: scan_ports|service_scan|web_scan|dir_scan|ssh_login|ssh_exec|ftp_anon|redis_check|complete
+ACTIONS:
+- scan_ports: initial recon (target=ip)
+- service_scan: get banner (target=ip:port)
+- web_scan: find SQLi/XSS/vulns (target=http://ip:port)
+- dir_scan: find hidden paths (target=http://ip:port)
+- ssh_login: bruteforce SSH creds (target=ip:port, use port 2222/22022 if found)
+- ssh_exec: run cmd with creds (target=ip:port, options: username,password,cmd)
+- ftp_anon: check anon FTP (target=ip)
+- redis_check: check unauth Redis (target=ip)
+- complete: done testing
+
+PRIORITY: If SSH found on any port (22,2222,22022), try ssh_login with that port. If HTTP found, do web_scan for SQLi/XSS.
 
 Reply JSON only:
-{"action":"x","target":"ip:port or url","options":{"key":"val"},"reasoning":"brief","risk_level":"low|med|high"}`, summary)
+{"action":"x","target":"ip:port","options":{"key":"val"},"reasoning":"brief","risk_level":"low|med|high"}`, summary)
 
 	messages := []Message{
 		{Role: "user", Content: prompt},

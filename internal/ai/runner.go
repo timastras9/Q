@@ -456,10 +456,23 @@ func (r *AutoRunner) actionSSHLogin(ctx context.Context, action *Action, decisio
 	}
 
 	module := r.framework.Current()
-	module.SetOption("RHOSTS", decision.Target)
 
-	if port := getOpt(decision.Options, "port"); port != "" {
-		module.SetOption("RPORT", port)
+	// Parse target - could be "ip:port" format
+	target := decision.Target
+	port := "22" // default
+
+	if strings.Contains(target, ":") {
+		parts := strings.Split(target, ":")
+		target = parts[0]
+		port = parts[1]
+	}
+
+	module.SetOption("RHOSTS", target)
+	module.SetOption("RPORT", port)
+
+	// Override port if explicitly set in options
+	if p := getOpt(decision.Options, "port"); p != "" {
+		module.SetOption("RPORT", p)
 	}
 	if user := getOpt(decision.Options, "username"); user != "" {
 		module.SetOption("USERNAME", user)
@@ -487,7 +500,7 @@ func (r *AutoRunner) actionSSHLogin(ctx context.Context, action *Action, decisio
 			Username: cred.Username,
 			Password: cred.Password,
 			Service:  "ssh",
-			Target:   decision.Target,
+			Target:   fmt.Sprintf("%s:%s", target, port),
 		}
 		r.state.Credentials = append(r.state.Credentials, cf)
 
@@ -497,6 +510,11 @@ func (r *AutoRunner) actionSSHLogin(ctx context.Context, action *Action, decisio
 	}
 
 	action.Result = result.Output
+	if result.Output == "" && result.Success {
+		action.Result = fmt.Sprintf("SSH credentials found on %s:%s", target, port)
+	} else if result.Output == "" {
+		action.Result = fmt.Sprintf("No valid SSH credentials found on %s:%s", target, port)
+	}
 	action.Success = result.Success
 
 	return action, nil
