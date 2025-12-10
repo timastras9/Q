@@ -3,8 +3,10 @@ package console
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"sort"
 	"strconv"
@@ -38,6 +40,8 @@ type Console struct {
 	workspace     string
 	history       []string
 	running       bool
+	lastScanState *ai.PentestState  // Store last autopwn state for reporting
+	lastReport    *ai.PentestReport // Store last autopwn report
 }
 
 func NewConsole() *Console {
@@ -168,6 +172,8 @@ func (c *Console) execute(line string) {
 		c.cmdAutoPwn(args)
 	case "history":
 		c.cmdHistory(args)
+	case "report":
+		c.cmdReport(args)
 	case "clear":
 		fmt.Print("\033[H\033[2J")
 	case "banner":
@@ -874,9 +880,23 @@ func (c *Console) cmdAutoPwn(args []string) {
 		cancel()
 	}()
 
-	_, err := runner.Run(ctx, target, []string{target})
+	state, err := runner.Run(ctx, target, []string{target})
 	if err != nil {
 		fmt.Printf("%s[-]%s Autopwn error: %v\n", colorRed, colorReset, err)
+	}
+
+	// Store state for report generation
+	if state != nil {
+		c.lastScanState = state
+	}
+	c.lastReport = runner.GetReport()
+
+	// Auto-save JSON for PDF generation
+	if c.lastScanState != nil {
+		jsonFile := fmt.Sprintf("pentest_%s_%s.json", strings.ReplaceAll(target, ".", "_"), time.Now().Format("20060102_150405"))
+		c.saveReportJSON(jsonFile)
+		fmt.Printf("%s[*]%s Scan results saved to: %s\n", colorBlue, colorReset, jsonFile)
+		fmt.Printf("%s[*]%s Generate PDF with: report pdf %s\n", colorBlue, colorReset, jsonFile)
 	}
 }
 
@@ -915,6 +935,479 @@ func severityColor(sev exploit.Severity) string {
 	default:
 		return colorReset
 	}
+}
+
+func (c *Console) cmdReport(args []string) {
+	if len(args) == 0 {
+		fmt.Printf("%s[-]%s Usage: report <format> [output_file]\n", colorRed, colorReset)
+		fmt.Println("  Formats: json, pdf, html, markdown")
+		fmt.Println()
+		fmt.Println("  Examples:")
+		fmt.Println("    report json                     - Save JSON report")
+		fmt.Println("    report pdf                      - Generate PDF report")
+		fmt.Println("    report pdf scan_results.json    - Generate PDF from JSON")
+		fmt.Println("    report html report.html         - Save HTML report")
+		return
+	}
+
+	format := strings.ToLower(args[0])
+
+	switch format {
+	case "json":
+		outputFile := "pentest_report.json"
+		if len(args) > 1 {
+			outputFile = args[1]
+		}
+		if c.lastScanState == nil {
+			fmt.Printf("%s[-]%s No scan data available. Run autopwn first.\n", colorRed, colorReset)
+			return
+		}
+		c.saveReportJSON(outputFile)
+		fmt.Printf("%s[+]%s JSON report saved to: %s\n", colorGreen, colorReset, outputFile)
+
+	case "pdf":
+		inputFile := ""
+		outputFile := "pentest_report.pdf"
+		if len(args) > 1 {
+			inputFile = args[1]
+		}
+		if len(args) > 2 {
+			outputFile = args[2]
+		}
+
+		// If no input file, generate from current state
+		if inputFile == "" {
+			if c.lastScanState == nil {
+				fmt.Printf("%s[-]%s No scan data available. Run autopwn first or specify JSON file.\n", colorRed, colorReset)
+				return
+			}
+			inputFile = "temp_scan_data.json"
+			c.saveReportJSON(inputFile)
+			defer os.Remove(inputFile)
+		}
+
+		c.generatePDF(inputFile, outputFile)
+
+	case "html":
+		outputFile := "pentest_report.html"
+		if len(args) > 1 {
+			outputFile = args[1]
+		}
+		if c.lastScanState == nil {
+			fmt.Printf("%s[-]%s No scan data available. Run autopwn first.\n", colorRed, colorReset)
+			return
+		}
+		c.saveReportHTML(outputFile)
+		fmt.Printf("%s[+]%s HTML report saved to: %s\n", colorGreen, colorReset, outputFile)
+
+	case "markdown", "md":
+		outputFile := "pentest_report.md"
+		if len(args) > 1 {
+			outputFile = args[1]
+		}
+		if c.lastScanState == nil {
+			fmt.Printf("%s[-]%s No scan data available. Run autopwn first.\n", colorRed, colorReset)
+			return
+		}
+		c.saveReportMarkdown(outputFile)
+		fmt.Printf("%s[+]%s Markdown report saved to: %s\n", colorGreen, colorReset, outputFile)
+
+	default:
+		fmt.Printf("%s[-]%s Unknown format: %s\n", colorRed, colorReset, format)
+	}
+}
+
+// ReportData represents the JSON structure for PDF generation
+type ReportData struct {
+	Target          string           `json:"target"`
+	Date            string           `json:"date"`
+	Tests           []TestResult     `json:"tests"`
+	Vulnerabilities []VulnEntry      `json:"vulnerabilities"`
+	Credentials     []CredEntry      `json:"credentials"`
+}
+
+type TestResult struct {
+	Name    string `json:"name"`
+	Action  string `json:"action"`
+	Target  string `json:"target"`
+	Success bool   `json:"success"`
+	Output  string `json:"output"`
+}
+
+type VulnEntry struct {
+	Type        string `json:"type"`
+	Severity    string `json:"severity"`
+	Target      string `json:"target"`
+	Description string `json:"description"`
+}
+
+type CredEntry struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Hash     string `json:"hash"`
+	Type     string `json:"type"`
+	Source   string `json:"source"`
+}
+
+func (c *Console) saveReportJSON(filename string) {
+	if c.lastScanState == nil {
+		return
+	}
+
+	state := c.lastScanState
+	data := ReportData{
+		Target: state.Target,
+		Date:   time.Now().Format("2006-01-02"),
+		Tests:  make([]TestResult, 0),
+		Vulnerabilities: make([]VulnEntry, 0),
+		Credentials: make([]CredEntry, 0),
+	}
+
+	// Convert action history to test results
+	for _, action := range state.ActionHistory {
+		data.Tests = append(data.Tests, TestResult{
+			Name:    action.Type,
+			Action:  action.Type,
+			Target:  action.Target,
+			Success: action.Success,
+			Output:  action.Result,
+		})
+	}
+
+	// Convert vulnerabilities
+	for _, vuln := range state.Vulnerabilities {
+		data.Vulnerabilities = append(data.Vulnerabilities, VulnEntry{
+			Type:        vuln.Type,
+			Severity:    vuln.Severity,
+			Target:      vuln.Target,
+			Description: vuln.Description,
+		})
+	}
+
+	// Convert credentials
+	for _, cred := range state.Credentials {
+		data.Credentials = append(data.Credentials, CredEntry{
+			Username: cred.Username,
+			Password: cred.Password,
+			Type:     "password",
+			Source:   cred.Service,
+		})
+	}
+
+	jsonData, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		fmt.Printf("%s[-]%s Failed to marshal JSON: %v\n", colorRed, colorReset, err)
+		return
+	}
+
+	if err := os.WriteFile(filename, jsonData, 0644); err != nil {
+		fmt.Printf("%s[-]%s Failed to save JSON: %v\n", colorRed, colorReset, err)
+	}
+}
+
+func (c *Console) generatePDF(inputFile, outputFile string) {
+	// Check if node and the report generator exist
+	scriptPath := "report/generate-report.js"
+	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
+		// Try alternate location
+		scriptPath = "./report/generate-report.js"
+		if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
+			fmt.Printf("%s[-]%s PDF generator not found. Run: cd report && npm install\n", colorRed, colorReset)
+			return
+		}
+	}
+
+	fmt.Printf("%s[*]%s Generating PDF report...\n", colorBlue, colorReset)
+
+	// Run the node script
+	cmd := exec.Command("node", scriptPath, inputFile, outputFile)
+	cmd.Dir = "."
+	output, err := cmd.CombinedOutput()
+
+	if err != nil {
+		fmt.Printf("%s[-]%s PDF generation failed: %v\n", colorRed, colorReset, err)
+		fmt.Println(string(output))
+		fmt.Printf("%s[*]%s Make sure to run: cd report && npm install\n", colorBlue, colorReset)
+		return
+	}
+
+	fmt.Printf("%s[+]%s PDF report generated: %s\n", colorGreen, colorReset, outputFile)
+}
+
+func (c *Console) saveReportHTML(filename string) {
+	if c.lastScanState == nil {
+		return
+	}
+
+	state := c.lastScanState
+	html := c.generateHTMLReport(state)
+
+	if err := os.WriteFile(filename, []byte(html), 0644); err != nil {
+		fmt.Printf("%s[-]%s Failed to save HTML: %v\n", colorRed, colorReset, err)
+	}
+}
+
+func (c *Console) saveReportMarkdown(filename string) {
+	if c.lastScanState == nil {
+		return
+	}
+
+	state := c.lastScanState
+	md := c.generateMarkdownReport(state)
+
+	if err := os.WriteFile(filename, []byte(md), 0644); err != nil {
+		fmt.Printf("%s[-]%s Failed to save Markdown: %v\n", colorRed, colorReset, err)
+	}
+}
+
+func (c *Console) generateHTMLReport(state *ai.PentestState) string {
+	var sb strings.Builder
+
+	sb.WriteString(`<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Penetration Test Report - ` + state.Target + `</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; background: #f5f5f5; }
+        .header { background: linear-gradient(135deg, #1a365d 0%, #2d3748 100%); color: white; padding: 40px; border-radius: 10px; margin-bottom: 30px; }
+        .header h1 { margin: 0 0 10px 0; font-size: 2.5em; }
+        .header .target { font-size: 1.2em; opacity: 0.9; }
+        .card { background: white; border-radius: 10px; padding: 25px; margin-bottom: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .card h2 { margin-top: 0; color: #1a365d; border-bottom: 2px solid #e2e8f0; padding-bottom: 10px; }
+        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-bottom: 20px; }
+        .stat { background: #f7fafc; padding: 20px; border-radius: 8px; text-align: center; }
+        .stat .value { font-size: 2em; font-weight: bold; }
+        .stat .label { color: #718096; font-size: 0.9em; }
+        .stat.critical .value { color: #c53030; }
+        .stat.high .value { color: #dd6b20; }
+        .stat.medium .value { color: #d69e2e; }
+        .stat.low .value { color: #38a169; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #e2e8f0; }
+        th { background: #f7fafc; font-weight: 600; }
+        .badge { padding: 4px 12px; border-radius: 20px; font-size: 0.85em; font-weight: 500; }
+        .badge.critical { background: #fed7d7; color: #c53030; }
+        .badge.high { background: #feebc8; color: #c05621; }
+        .badge.medium { background: #fefcbf; color: #975a16; }
+        .badge.low { background: #c6f6d5; color: #276749; }
+        .badge.info { background: #bee3f8; color: #2b6cb0; }
+        .badge.success { background: #c6f6d5; color: #276749; }
+        .badge.failed { background: #fed7d7; color: #c53030; }
+        .test-item { padding: 15px; border-left: 4px solid #38a169; margin-bottom: 10px; background: #f7fafc; border-radius: 0 8px 8px 0; }
+        .test-item.failed { border-left-color: #e53e3e; }
+        .test-item .name { font-weight: 600; }
+        .test-item .target { color: #718096; font-size: 0.9em; }
+        .test-item .output { font-family: monospace; font-size: 0.85em; background: #2d3748; color: #e2e8f0; padding: 10px; border-radius: 4px; margin-top: 10px; white-space: pre-wrap; max-height: 200px; overflow-y: auto; }
+        .cred-alert { background: #fed7d7; border: 2px solid #c53030; border-radius: 10px; padding: 20px; margin-bottom: 20px; }
+        .cred-alert h3 { color: #c53030; margin-top: 0; }
+        .footer { text-align: center; color: #718096; padding: 20px; }
+    </style>
+</head>
+<body>
+`)
+
+	// Header
+	sb.WriteString(fmt.Sprintf(`<div class="header">
+    <h1>Penetration Test Report</h1>
+    <div class="target">Target: %s</div>
+    <div class="target">Date: %s</div>
+</div>
+`, state.Target, time.Now().Format("January 2, 2006")))
+
+	// Stats summary
+	critCount := 0
+	highCount := 0
+	medCount := 0
+	lowCount := 0
+	for _, v := range state.Vulnerabilities {
+		switch strings.ToLower(v.Severity) {
+		case "critical":
+			critCount++
+		case "high":
+			highCount++
+		case "medium":
+			medCount++
+		case "low":
+			lowCount++
+		}
+	}
+
+	sb.WriteString(`<div class="card">
+    <h2>Executive Summary</h2>
+    <div class="stats">
+`)
+	sb.WriteString(fmt.Sprintf(`        <div class="stat critical"><div class="value">%d</div><div class="label">Critical</div></div>
+`, critCount))
+	sb.WriteString(fmt.Sprintf(`        <div class="stat high"><div class="value">%d</div><div class="label">High</div></div>
+`, highCount))
+	sb.WriteString(fmt.Sprintf(`        <div class="stat medium"><div class="value">%d</div><div class="label">Medium</div></div>
+`, medCount))
+	sb.WriteString(fmt.Sprintf(`        <div class="stat low"><div class="value">%d</div><div class="label">Low</div></div>
+`, lowCount))
+	sb.WriteString(fmt.Sprintf(`        <div class="stat"><div class="value">%d</div><div class="label">Tests Run</div></div>
+`, len(state.ActionHistory)))
+	sb.WriteString(fmt.Sprintf(`        <div class="stat"><div class="value">%d</div><div class="label">Credentials</div></div>
+`, len(state.Credentials)))
+	sb.WriteString(`    </div>
+</div>
+`)
+
+	// Credentials alert
+	if len(state.Credentials) > 0 {
+		sb.WriteString(`<div class="cred-alert">
+    <h3>⚠️ CRITICAL: Credentials Exposed</h3>
+    <p>The following credentials were extracted during testing:</p>
+    <table>
+        <tr><th>Username</th><th>Password</th><th>Source</th></tr>
+`)
+		for _, cred := range state.Credentials {
+			sb.WriteString(fmt.Sprintf("        <tr><td><strong>%s</strong></td><td><code>%s</code></td><td>%s</td></tr>\n",
+				cred.Username, cred.Password, cred.Service))
+		}
+		sb.WriteString(`    </table>
+</div>
+`)
+	}
+
+	// Test Results
+	sb.WriteString(`<div class="card">
+    <h2>Test Results</h2>
+`)
+	for _, action := range state.ActionHistory {
+		statusClass := ""
+		if !action.Success {
+			statusClass = " failed"
+		}
+		sb.WriteString(fmt.Sprintf(`    <div class="test-item%s">
+        <div class="name">%s <span class="badge %s">%s</span></div>
+        <div class="target">%s</div>
+`, statusClass, action.Type, func() string {
+			if action.Success {
+				return "success"
+			}
+			return "failed"
+		}(), func() string {
+			if action.Success {
+				return "SUCCESS"
+			}
+			return "FAILED"
+		}(), action.Target))
+
+		if action.Result != "" && len(action.Result) < 1000 {
+			sb.WriteString(fmt.Sprintf(`        <div class="output">%s</div>
+`, action.Result))
+		}
+		sb.WriteString(`    </div>
+`)
+	}
+	sb.WriteString(`</div>
+`)
+
+	// Vulnerabilities
+	if len(state.Vulnerabilities) > 0 {
+		sb.WriteString(`<div class="card">
+    <h2>Vulnerabilities</h2>
+    <table>
+        <tr><th>Severity</th><th>Type</th><th>Target</th><th>Description</th></tr>
+`)
+		for _, v := range state.Vulnerabilities {
+			sb.WriteString(fmt.Sprintf(`        <tr>
+            <td><span class="badge %s">%s</span></td>
+            <td>%s</td>
+            <td>%s</td>
+            <td>%s</td>
+        </tr>
+`, strings.ToLower(v.Severity), strings.ToUpper(v.Severity), v.Type, v.Target, v.Description))
+		}
+		sb.WriteString(`    </table>
+</div>
+`)
+	}
+
+	// Footer
+	sb.WriteString(`<div class="footer">
+    <p>Generated by PentestAI</p>
+    <p>CONFIDENTIAL - FOR AUTHORIZED USE ONLY</p>
+</div>
+</body>
+</html>`)
+
+	return sb.String()
+}
+
+func (c *Console) generateMarkdownReport(state *ai.PentestState) string {
+	var sb strings.Builder
+
+	sb.WriteString(fmt.Sprintf("# Penetration Test Report\n\n"))
+	sb.WriteString(fmt.Sprintf("**Target:** %s\n\n", state.Target))
+	sb.WriteString(fmt.Sprintf("**Date:** %s\n\n", time.Now().Format("January 2, 2006")))
+	sb.WriteString("---\n\n")
+
+	// Credentials alert
+	if len(state.Credentials) > 0 {
+		sb.WriteString("## ⚠️ CRITICAL: Exposed Credentials\n\n")
+		sb.WriteString("| Username | Password | Source |\n")
+		sb.WriteString("|----------|----------|--------|\n")
+		for _, cred := range state.Credentials {
+			sb.WriteString(fmt.Sprintf("| **%s** | `%s` | %s |\n", cred.Username, cred.Password, cred.Service))
+		}
+		sb.WriteString("\n**Immediate action required: Change all exposed passwords.**\n\n")
+		sb.WriteString("---\n\n")
+	}
+
+	// Summary
+	critCount := 0
+	highCount := 0
+	medCount := 0
+	for _, v := range state.Vulnerabilities {
+		switch strings.ToLower(v.Severity) {
+		case "critical":
+			critCount++
+		case "high":
+			highCount++
+		case "medium":
+			medCount++
+		}
+	}
+
+	sb.WriteString("## Executive Summary\n\n")
+	sb.WriteString(fmt.Sprintf("- **Critical:** %d\n", critCount))
+	sb.WriteString(fmt.Sprintf("- **High:** %d\n", highCount))
+	sb.WriteString(fmt.Sprintf("- **Medium:** %d\n", medCount))
+	sb.WriteString(fmt.Sprintf("- **Tests Run:** %d\n", len(state.ActionHistory)))
+	sb.WriteString(fmt.Sprintf("- **Credentials Found:** %d\n\n", len(state.Credentials)))
+
+	// Test Results
+	sb.WriteString("## Test Results\n\n")
+	for _, action := range state.ActionHistory {
+		status := "✅"
+		if !action.Success {
+			status = "❌"
+		}
+		sb.WriteString(fmt.Sprintf("### %s %s\n\n", status, action.Type))
+		sb.WriteString(fmt.Sprintf("**Target:** %s\n\n", action.Target))
+		if action.Result != "" && len(action.Result) < 500 {
+			sb.WriteString("```\n")
+			sb.WriteString(action.Result)
+			sb.WriteString("\n```\n\n")
+		}
+	}
+
+	// Vulnerabilities
+	if len(state.Vulnerabilities) > 0 {
+		sb.WriteString("## Vulnerabilities\n\n")
+		sb.WriteString("| Severity | Type | Target | Description |\n")
+		sb.WriteString("|----------|------|--------|-------------|\n")
+		for _, v := range state.Vulnerabilities {
+			sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s |\n", v.Severity, v.Type, v.Target, v.Description))
+		}
+	}
+
+	sb.WriteString("\n---\n\n*Generated by PentestAI*\n")
+
+	return sb.String()
 }
 
 func parsePorts(s string) []int {

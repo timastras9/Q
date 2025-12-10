@@ -19,6 +19,7 @@ type AutoRunner struct {
 	webScanner *webapp.WebScanner
 	framework  *exploit.Framework
 	state      *PentestState
+	report     *PentestReport
 	callbacks  RunnerCallbacks
 	running    bool
 	maxActions int
@@ -52,6 +53,16 @@ func (r *AutoRunner) SetMaxActions(max int) {
 	r.maxActions = max
 }
 
+// GetReport returns the last generated report
+func (r *AutoRunner) GetReport() *PentestReport {
+	return r.report
+}
+
+// GetState returns the current pentest state
+func (r *AutoRunner) GetState() *PentestState {
+	return r.state
+}
+
 // getOpt safely extracts string option from interface map
 func getOpt(opts map[string]interface{}, key string) string {
 	if opts == nil {
@@ -82,7 +93,7 @@ func (r *AutoRunner) SetCallbacks(cb RunnerCallbacks) {
 }
 
 // Run starts an autonomous pentest against the target
-func (r *AutoRunner) Run(ctx context.Context, target string, scope []string) (*PentestReport, error) {
+func (r *AutoRunner) Run(ctx context.Context, target string, scope []string) (*PentestState, error) {
 	r.state.Target = target
 	r.state.Scope = scope
 	r.state.Phase = "reconnaissance"
@@ -153,22 +164,21 @@ func (r *AutoRunner) Run(ctx context.Context, target string, scope []string) (*P
 	// Generate final report
 	report, err := r.ai.GenerateReport(ctx, r.state)
 	if err != nil {
-		return nil, err
+		return r.state, err
 	}
+
+	// Store report for later retrieval
+	r.report = report
 
 	if r.callbacks.OnComplete != nil {
 		r.callbacks.OnComplete(report)
 	}
 
-	return report, nil
+	return r.state, nil
 }
 
 func (r *AutoRunner) Stop() {
 	r.running = false
-}
-
-func (r *AutoRunner) GetState() *PentestState {
-	return r.state
 }
 
 func (r *AutoRunner) executeAction(ctx context.Context, decision *AIDecision) (*Action, error) {

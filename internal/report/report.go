@@ -393,3 +393,99 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// ScanResult represents a single test result for PDF export
+type ScanResult struct {
+	Name    string `json:"name"`
+	Action  string `json:"action"`
+	Target  string `json:"target"`
+	Success bool   `json:"success"`
+	Output  string `json:"output"`
+	Results string `json:"results"`
+}
+
+// VulnerabilityEntry represents a vulnerability for PDF export
+type VulnerabilityEntry struct {
+	Type        string `json:"type"`
+	Name        string `json:"name"`
+	Severity    string `json:"severity"`
+	Target      string `json:"target"`
+	Description string `json:"description"`
+	Details     string `json:"details"`
+}
+
+// CredentialEntry represents a credential for PDF export
+type CredentialEntry struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Hash     string `json:"hash"`
+	Type     string `json:"type"`
+	Source   string `json:"source"`
+	Service  string `json:"service"`
+}
+
+// PDFExportData represents the data structure for PDF generation
+type PDFExportData struct {
+	Target          string               `json:"target"`
+	Date            string               `json:"date"`
+	Tests           []ScanResult         `json:"tests"`
+	Vulnerabilities []VulnerabilityEntry `json:"vulnerabilities"`
+	Credentials     []CredentialEntry    `json:"credentials"`
+}
+
+// ToPDFExport converts the report to PDF export format
+func (r *Report) ToPDFExport() *PDFExportData {
+	data := &PDFExportData{
+		Target:          r.Target,
+		Date:            r.StartTime.Format("2006-01-02"),
+		Tests:           make([]ScanResult, 0),
+		Vulnerabilities: make([]VulnerabilityEntry, 0),
+		Credentials:     make([]CredentialEntry, 0),
+	}
+
+	// Convert exploit results to scan results
+	for _, exp := range r.Exploits {
+		data.Tests = append(data.Tests, ScanResult{
+			Name:    exp.Module,
+			Action:  exp.Module,
+			Target:  exp.Target,
+			Success: exp.Success,
+			Output:  exp.Output,
+		})
+	}
+
+	// Convert web findings to vulnerabilities
+	for _, finding := range r.WebFindings {
+		data.Vulnerabilities = append(data.Vulnerabilities, VulnerabilityEntry{
+			Type:        finding.Type,
+			Name:        finding.Type,
+			Severity:    strings.ToLower(finding.Severity),
+			Target:      finding.URL,
+			Description: finding.Description,
+			Details:     finding.Evidence,
+		})
+	}
+
+	// Convert credentials
+	for _, cred := range r.Credentials {
+		data.Credentials = append(data.Credentials, CredentialEntry{
+			Username: cred.Username,
+			Password: cred.Password,
+			Hash:     cred.Hash,
+			Type:     cred.Type,
+			Source:   cred.Source,
+		})
+	}
+
+	return data
+}
+
+// SavePDFExport saves the report in PDF export JSON format
+func (r *Report) SavePDFExport(filename string) error {
+	data := r.ToPDFExport()
+	jsonData, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filename, jsonData, 0644)
+}
