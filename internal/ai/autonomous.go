@@ -216,7 +216,7 @@ func (a *AutoPentester) GetNextAction(ctx context.Context, state *PentestState) 
 	// Create compact state summary to minimize tokens
 	summary := a.compactState(state)
 
-	prompt := fmt.Sprintf(`Pentest AI. Pick next action. Goal: gain access and find vulns.
+	prompt := fmt.Sprintf(`Pentest AI. Pick next action. Goal: gain access, find vulns, exploit them.
 
 STATE:%s
 
@@ -225,13 +225,19 @@ ACTIONS:
 - service_scan: get banner (target=ip:port)
 - web_scan: find SQLi/XSS/vulns (target=http://ip:port)
 - dir_scan: find hidden paths (target=http://ip:port)
+- cmd_inject: exploit command injection for RCE (target=http://ip:port, options: uri=/vulnerabilities/exec/, cmd=id)
+- sqli_exploit: exploit SQL injection (target=http://ip:port, options: uri=/vulnerabilities/sqli/)
 - ssh_login: bruteforce SSH creds (target=ip:port, use port 2222/22022 if found)
 - ssh_exec: run cmd with creds (target=ip:port, options: username,password,cmd)
 - ftp_anon: check anon FTP (target=ip)
 - redis_check: check unauth Redis (target=ip)
 - complete: done testing
 
-PRIORITY: If SSH found on any port (22,2222,22022), try ssh_login with that port. If HTTP found, do web_scan for SQLi/XSS.
+PRIORITY:
+1. If SSH on 22/2222/22022, try ssh_login immediately
+2. If HTTP 8081 (DVWA) found, try cmd_inject and sqli_exploit
+3. If HTTP 8082 (bWAPP) found, try cmd_inject
+4. After finding vulns, EXPLOIT them to show customer the risk
 
 Reply JSON only:
 {"action":"x","target":"ip:port","options":{"key":"val"},"reasoning":"brief","risk_level":"low|med|high"}`, summary)
@@ -282,7 +288,8 @@ Reply JSON only:
 		"scan_ports": true, "scan_network": true, "service_scan": true,
 		"web_scan": true, "dir_scan": true, "ssh_login": true,
 		"ssh_exec": true, "ftp_login": true, "ftp_anon": true,
-		"http_login": true, "redis_check": true, "complete": true,
+		"http_login": true, "redis_check": true, "cmd_inject": true,
+		"sqli_exploit": true, "complete": true,
 	}
 	if !validActions[decision.Action] {
 		decision.Action = "complete"

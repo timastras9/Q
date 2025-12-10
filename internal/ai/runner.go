@@ -204,6 +204,10 @@ func (r *AutoRunner) executeAction(ctx context.Context, decision *AIDecision) (*
 		return r.actionHTTPLogin(ctx, action, decision)
 	case "redis_check":
 		return r.actionRedisCheck(ctx, action, decision)
+	case "cmd_inject":
+		return r.actionCmdInject(ctx, action, decision)
+	case "sqli_exploit":
+		return r.actionSQLiExploit(ctx, action, decision)
 	default:
 		action.Result = fmt.Sprintf("Unknown action: %s", decision.Action)
 		action.Success = false
@@ -770,6 +774,180 @@ func (r *AutoRunner) updatePhase() {
 			r.callbacks.OnPhaseChange(newPhase)
 		}
 	}
+}
+
+func (r *AutoRunner) actionCmdInject(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	if err := r.framework.Use("exploit/multi/http/cmd_injection"); err != nil {
+		action.Result = fmt.Sprintf("Module error: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	module := r.framework.Current()
+
+	// Parse target URL
+	target := decision.Target
+	port := "80"
+
+	if strings.HasPrefix(target, "http://") {
+		target = strings.TrimPrefix(target, "http://")
+	} else if strings.HasPrefix(target, "https://") {
+		target = strings.TrimPrefix(target, "https://")
+		module.SetOption("SSL", "true")
+		port = "443"
+	}
+
+	if strings.Contains(target, ":") {
+		parts := strings.Split(target, ":")
+		target = parts[0]
+		portPath := parts[1]
+		if idx := strings.Index(portPath, "/"); idx != -1 {
+			port = portPath[:idx]
+		} else {
+			port = portPath
+		}
+	}
+
+	module.SetOption("RHOSTS", target)
+	module.SetOption("RPORT", port)
+
+	if cmd := getOpt(decision.Options, "cmd"); cmd != "" {
+		module.SetOption("CMD", cmd)
+	}
+	if uri := getOpt(decision.Options, "uri"); uri != "" {
+		module.SetOption("TARGETURI", uri)
+	}
+	if cookie := getOpt(decision.Options, "cookie"); cookie != "" {
+		module.SetOption("COOKIE", cookie)
+	}
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("Command injection failed: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	if result.Success {
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "command_injection",
+			Severity:    "critical",
+			Target:      decision.Target,
+			Description: "OS Command Injection - Remote Code Execution achieved",
+			Evidence:    result.Output,
+			Remediation: "Sanitize user input, use parameterized commands, implement allowlist validation",
+			Timestamp:   time.Now(),
+		})
+
+		// Add session if we got RCE
+		r.state.Sessions = append(r.state.Sessions, SessionInfo{
+			ID:     fmt.Sprintf("rce-%d", len(r.state.Sessions)+1),
+			Type:   "web_rce",
+			Target: decision.Target,
+			User:   "www-data",
+		})
+
+		if r.callbacks.OnFinding != nil {
+			r.callbacks.OnFinding(Finding{
+				Type:        "command_injection",
+				Severity:    "critical",
+				Target:      decision.Target,
+				Description: "Command Injection RCE",
+			})
+		}
+	}
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	return action, nil
+}
+
+func (r *AutoRunner) actionSQLiExploit(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	if err := r.framework.Use("exploit/multi/http/dvwa_sqli"); err != nil {
+		action.Result = fmt.Sprintf("Module error: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	module := r.framework.Current()
+
+	// Parse target URL
+	target := decision.Target
+	port := "80"
+
+	if strings.HasPrefix(target, "http://") {
+		target = strings.TrimPrefix(target, "http://")
+	}
+
+	if strings.Contains(target, ":") {
+		parts := strings.Split(target, ":")
+		target = parts[0]
+		portPath := parts[1]
+		if idx := strings.Index(portPath, "/"); idx != -1 {
+			port = portPath[:idx]
+		} else {
+			port = portPath
+		}
+	}
+
+	module.SetOption("RHOSTS", target)
+	module.SetOption("RPORT", port)
+
+	if cookie := getOpt(decision.Options, "cookie"); cookie != "" {
+		module.SetOption("COOKIE", cookie)
+	}
+	if uri := getOpt(decision.Options, "uri"); uri != "" {
+		module.SetOption("TARGETURI", uri)
+	}
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("SQLi exploit failed: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	if result.Success {
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "sql_injection",
+			Severity:    "critical",
+			Target:      decision.Target,
+			Description: "SQL Injection - Database access achieved",
+			Evidence:    result.Output,
+			Remediation: "Use parameterized queries/prepared statements, implement input validation",
+			Timestamp:   time.Now(),
+		})
+
+		// Add any extracted credentials
+		for _, cred := range result.Credentials {
+			cf := CredentialFind{
+				Username: cred.Username,
+				Password: cred.Password,
+				Service:  "sqli_dump",
+				Target:   decision.Target,
+			}
+			r.state.Credentials = append(r.state.Credentials, cf)
+
+			if r.callbacks.OnCredential != nil {
+				r.callbacks.OnCredential(cf)
+			}
+		}
+
+		if r.callbacks.OnFinding != nil {
+			r.callbacks.OnFinding(Finding{
+				Type:        "sql_injection",
+				Severity:    "critical",
+				Target:      decision.Target,
+				Description: "SQL Injection vulnerability exploited",
+			})
+		}
+	}
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	return action, nil
 }
 
 func parsePorts(s string) []int {
