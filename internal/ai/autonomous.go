@@ -519,6 +519,8 @@ REMAINING ACTIONS:
 - lfi_exploit: local file inclusion (target=http://ip:port, uri=/page.php?file=)
 - ssrf_exploit: server-side request forgery (target=http://ip:port, uri=/fetch?url=)
 - file_upload: malicious file upload (target=http://ip:port, uri=/upload.php)
+- nuclei_scan: run Nuclei CVE scanner (target=http://ip:port, templates=cves,critical, severity=critical,high)
+- xss_scan: test for XSS vulnerabilities (target=http://ip:port, uri=/search?q=)
 - reverse_shell: generate reverse shell payloads (target=ip, lhost=attacker_ip, lport=port)
 - complete: all done
 
@@ -577,6 +579,7 @@ Reply JSON:
 		"sqli_exploit": true, "complete": true, "full_scan": true,
 		"ssh_recon": true, "reverse_shell": true, "cred_spray": true,
 		"lfi_exploit": true, "ssrf_exploit": true, "file_upload": true,
+		"nuclei_scan": true, "xss_scan": true,
 	}
 	if !validActions[decision.Action] {
 		decision.Action = "complete"

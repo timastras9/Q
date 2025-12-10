@@ -222,6 +222,10 @@ func (r *AutoRunner) executeAction(ctx context.Context, decision *AIDecision) (*
 		return r.actionSSRF(ctx, action, decision)
 	case "file_upload":
 		return r.actionFileUpload(ctx, action, decision)
+	case "nuclei_scan":
+		return r.actionNucleiScan(ctx, action, decision)
+	case "xss_scan":
+		return r.actionXSSScan(ctx, action, decision)
 	default:
 		action.Result = fmt.Sprintf("Unknown action: %s", decision.Action)
 		action.Success = false
@@ -1572,6 +1576,177 @@ func (r *AutoRunner) actionFileUpload(ctx context.Context, action *Action, decis
 				Severity:    "critical",
 				Target:      decision.Target,
 				Description: "File upload RCE achieved",
+			})
+		}
+	}
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	return action, nil
+}
+
+// actionNucleiScan runs Nuclei vulnerability scanner
+func (r *AutoRunner) actionNucleiScan(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	if err := r.framework.Use("auxiliary/scanner/nuclei"); err != nil {
+		action.Result = fmt.Sprintf("Module error: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	module := r.framework.Current()
+
+	// Parse target URL
+	target := decision.Target
+	port := "80"
+	ssl := false
+
+	if strings.HasPrefix(target, "http://") {
+		target = strings.TrimPrefix(target, "http://")
+	} else if strings.HasPrefix(target, "https://") {
+		target = strings.TrimPrefix(target, "https://")
+		ssl = true
+		port = "443"
+	}
+
+	if strings.Contains(target, ":") {
+		parts := strings.Split(target, ":")
+		target = parts[0]
+		portPath := parts[1]
+		if idx := strings.Index(portPath, "/"); idx != -1 {
+			port = portPath[:idx]
+		} else {
+			port = portPath
+		}
+	}
+
+	module.SetOption("RHOSTS", target)
+	module.SetOption("RPORT", port)
+	if ssl {
+		module.SetOption("SSL", "true")
+	}
+
+	// Optional settings
+	if templates := getOpt(decision.Options, "templates"); templates != "" {
+		module.SetOption("TEMPLATES", templates)
+	}
+	if severity := getOpt(decision.Options, "severity"); severity != "" {
+		module.SetOption("SEVERITY", severity)
+	}
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("Nuclei scan failed: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	// Record findings from nuclei
+	if result.Success {
+		if findings, ok := result.Data["findings"].([]exploit.NucleiFinding); ok {
+			for _, f := range findings {
+				severity := f.Info.Severity
+				if severity == "" {
+					severity = "info"
+				}
+
+				r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+					Type:        "nuclei_" + f.TemplateID,
+					Severity:    severity,
+					Target:      f.MatchedAt,
+					Description: f.Info.Name + ": " + f.Info.Description,
+					Evidence:    f.TemplateID,
+					Timestamp:   time.Now(),
+				})
+
+				if r.callbacks.OnFinding != nil {
+					r.callbacks.OnFinding(Finding{
+						Type:        "nuclei_" + f.TemplateID,
+						Severity:    severity,
+						Target:      f.MatchedAt,
+						Description: f.Info.Name,
+					})
+				}
+			}
+		}
+	}
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	return action, nil
+}
+
+// actionXSSScan tests for XSS vulnerabilities
+func (r *AutoRunner) actionXSSScan(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	if err := r.framework.Use("auxiliary/scanner/http/xss"); err != nil {
+		action.Result = fmt.Sprintf("Module error: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	module := r.framework.Current()
+
+	// Parse target URL
+	target := decision.Target
+	port := "80"
+
+	if strings.HasPrefix(target, "http://") {
+		target = strings.TrimPrefix(target, "http://")
+	} else if strings.HasPrefix(target, "https://") {
+		target = strings.TrimPrefix(target, "https://")
+		module.SetOption("SSL", "true")
+		port = "443"
+	}
+
+	if strings.Contains(target, ":") {
+		parts := strings.Split(target, ":")
+		target = parts[0]
+		portPath := parts[1]
+		if idx := strings.Index(portPath, "/"); idx != -1 {
+			port = portPath[:idx]
+		} else {
+			port = portPath
+		}
+	}
+
+	module.SetOption("RHOSTS", target)
+	module.SetOption("RPORT", port)
+
+	if uri := getOpt(decision.Options, "uri"); uri != "" {
+		module.SetOption("TARGETURI", uri)
+	}
+	if cookie := getOpt(decision.Options, "cookie"); cookie != "" {
+		module.SetOption("COOKIE", cookie)
+	}
+	if method := getOpt(decision.Options, "method"); method != "" {
+		module.SetOption("METHOD", method)
+	}
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("XSS scan failed: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	if result.Success {
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "xss_reflected",
+			Severity:    "medium",
+			Target:      decision.Target,
+			Description: "Cross-Site Scripting (XSS) vulnerability detected",
+			Evidence:    result.Output,
+			Remediation: "Encode output, use Content-Security-Policy, validate input",
+			Timestamp:   time.Now(),
+		})
+
+		if r.callbacks.OnFinding != nil {
+			r.callbacks.OnFinding(Finding{
+				Type:        "xss_reflected",
+				Severity:    "medium",
+				Target:      decision.Target,
+				Description: "XSS vulnerability found",
 			})
 		}
 	}
