@@ -83,7 +83,229 @@ function generateReport(scanData, outputPath) {
         safeText(line, 50, y);
         y += 20;
     });
-    
+
+    // ============ RECONNAISSANCE ============
+    const recon = scanData.recon || {};
+    if (Object.keys(recon).length > 0) {
+        doc.addPage();
+        doc.rect(50, 40, contentWidth, 3).fill(colors.accent);
+        doc.fontSize(18).fillColor(colors.primary);
+        safeText('RECONNAISSANCE', 50, 55);
+
+        y = 95;
+
+        // Target Information Box
+        doc.roundedRect(50, y, contentWidth, 85, 3).fillAndStroke(colors.background, colors.border);
+        doc.fontSize(10).fillColor(colors.primary).font('Helvetica-Bold');
+        safeText('TARGET INFORMATION', 60, y + 10);
+        doc.font('Helvetica');
+
+        doc.fontSize(9).fillColor(colors.text);
+        safeText(`Domain: ${scanData.target}`, 60, y + 28);
+
+        const geo = recon.geolocation || {};
+        if (geo.country) {
+            safeText(`Location: ${geo.city || ''}, ${geo.region || ''}, ${geo.country || ''}`, 60, y + 42);
+            safeText(`ISP: ${geo.isp || 'N/A'}`, 300, y + 42);
+        }
+        if (geo.asn) {
+            safeText(`ASN: ${geo.asn}`, 60, y + 56);
+            safeText(`Organization: ${geo.org || 'N/A'}`, 300, y + 56);
+        }
+        if (geo.latitude && geo.longitude) {
+            safeText(`Coordinates: ${geo.latitude}, ${geo.longitude}`, 60, y + 70);
+        }
+
+        y += 95;
+
+        // IP Addresses
+        const ips = recon.ip_addresses || [];
+        if (ips.length > 0) {
+            doc.roundedRect(50, y, contentWidth / 2 - 5, 20 + (ips.length * 18), 3).fillAndStroke(colors.background, colors.border);
+            doc.fontSize(10).fillColor(colors.primary).font('Helvetica-Bold');
+            safeText('IP ADDRESSES', 60, y + 8);
+            doc.font('Helvetica').fontSize(8).fillColor(colors.text);
+
+            let ipY = y + 25;
+            ips.forEach(ip => {
+                safeText(`${ip.type}: ${ip.ip}`, 60, ipY);
+                if (ip.provider) {
+                    doc.fillColor(colors.lightText);
+                    safeText(`(${ip.provider})`, 220, ipY);
+                    doc.fillColor(colors.text);
+                }
+                ipY += 18;
+            });
+        }
+
+        // DNS Records (right column)
+        const dns = recon.dns_records || [];
+        if (dns.length > 0) {
+            const dnsHeight = 20 + Math.min(dns.length, 5) * 18;
+            doc.roundedRect(50 + contentWidth / 2 + 5, y, contentWidth / 2 - 5, dnsHeight, 3).fillAndStroke(colors.background, colors.border);
+            doc.fontSize(10).fillColor(colors.primary).font('Helvetica-Bold');
+            safeText('DNS RECORDS', 60 + contentWidth / 2, y + 8);
+            doc.font('Helvetica').fontSize(8).fillColor(colors.text);
+
+            let dnsY = y + 25;
+            dns.slice(0, 5).forEach(rec => {
+                safeText(`${rec.type}: ${(rec.value || '').substring(0, 35)}`, 60 + contentWidth / 2, dnsY);
+                dnsY += 18;
+            });
+        }
+
+        y += Math.max(20 + (ips.length * 18), 20 + Math.min(dns.length, 5) * 18) + 10;
+
+        // Open Ports
+        const ports = recon.open_ports || [];
+        if (ports.length > 0) {
+            doc.addPage();
+            doc.rect(50, 40, contentWidth, 3).fill(colors.accent);
+            doc.fontSize(18).fillColor(colors.primary);
+            safeText('OPEN PORTS & SERVICES', 50, 55);
+
+            y = 90;
+            doc.roundedRect(50, y, contentWidth, 25, 2).fill(colors.primary);
+            doc.fontSize(9).fillColor('#ffffff');
+            safeText('PORT', 60, y + 8);
+            safeText('PROTOCOL', 120, y + 8);
+            safeText('SERVICE', 190, y + 8);
+            safeText('VERSION', 300, y + 8);
+            safeText('STATE', 450, y + 8);
+
+            y += 28;
+            ports.forEach((port, i) => {
+                doc.roundedRect(50, y, contentWidth, 22, 0).fill(i % 2 === 0 ? '#ffffff' : colors.background);
+                doc.fontSize(9).fillColor(colors.primary);
+                safeText(port.port.toString(), 60, y + 6);
+                doc.fillColor(colors.text);
+                safeText(port.protocol || 'tcp', 120, y + 6);
+                safeText(port.service || 'unknown', 190, y + 6);
+                doc.fillColor(colors.lightText);
+                safeText((port.version || '').substring(0, 25), 300, y + 6);
+
+                const stateColor = port.state === 'open' ? colors.low : colors.critical;
+                doc.roundedRect(445, y + 3, 45, 16, 8).fill(stateColor);
+                doc.fontSize(7).fillColor('#ffffff');
+                safeText(port.state || 'open', 445, y + 7, { width: 45, align: 'center' });
+
+                y += 25;
+            });
+        }
+
+        // WHOIS Information
+        const whois = recon.whois || {};
+        if (Object.keys(whois).length > 0) {
+            y += 15;
+            if (y > pageHeight - 200) {
+                doc.addPage();
+                y = 50;
+            }
+
+            doc.roundedRect(50, y, contentWidth, 110, 3).fillAndStroke(colors.background, colors.border);
+            doc.fontSize(10).fillColor(colors.primary).font('Helvetica-Bold');
+            safeText('WHOIS INFORMATION', 60, y + 10);
+            doc.font('Helvetica').fontSize(9).fillColor(colors.text);
+
+            safeText(`Domain: ${whois.domain || scanData.target}`, 60, y + 30);
+            safeText(`Registrar: ${whois.registrar || 'N/A'}`, 300, y + 30);
+            safeText(`Created: ${whois.created || 'N/A'}`, 60, y + 48);
+            safeText(`Expires: ${whois.expires || 'N/A'}`, 200, y + 48);
+            safeText(`Updated: ${whois.updated || 'N/A'}`, 340, y + 48);
+
+            if (whois.nameservers) {
+                safeText(`Nameservers: ${whois.nameservers.join(', ')}`, 60, y + 66);
+            }
+            if (whois.registrant) {
+                safeText(`Registrant: ${whois.registrant.organization || 'N/A'}`, 60, y + 84);
+                safeText(`Country: ${whois.registrant.country || 'N/A'}`, 400, y + 84);
+            }
+
+            y += 120;
+        }
+
+        // SSL Certificate
+        const ssl = recon.ssl_certificate || {};
+        if (Object.keys(ssl).length > 0) {
+            if (y > pageHeight - 150) {
+                doc.addPage();
+                y = 50;
+            }
+
+            doc.roundedRect(50, y, contentWidth, 95, 3).fillAndStroke(colors.background, colors.border);
+            doc.fontSize(10).fillColor(colors.primary).font('Helvetica-Bold');
+            safeText('SSL/TLS CERTIFICATE', 60, y + 10);
+            doc.font('Helvetica').fontSize(9).fillColor(colors.text);
+
+            safeText(`Subject: ${ssl.subject || 'N/A'}`, 60, y + 30);
+            safeText(`Issuer: ${ssl.issuer || 'N/A'}`, 300, y + 30);
+            safeText(`Valid From: ${ssl.valid_from || 'N/A'}`, 60, y + 48);
+            safeText(`Valid To: ${ssl.valid_to || 'N/A'}`, 200, y + 48);
+            safeText(`Protocol: ${ssl.protocol || 'N/A'}`, 340, y + 48);
+            safeText(`Cipher: ${ssl.cipher_suite || 'N/A'}`, 60, y + 66);
+            if (ssl.san) {
+                safeText(`SANs: ${ssl.san.slice(0, 3).join(', ')}`, 60, y + 82);
+            }
+
+            y += 105;
+        }
+
+        // Technologies Detected
+        const techs = recon.technologies || [];
+        if (techs.length > 0) {
+            if (y > pageHeight - 150) {
+                doc.addPage();
+                y = 50;
+            }
+
+            doc.roundedRect(50, y, contentWidth, 25 + Math.ceil(techs.length / 3) * 25, 3).fillAndStroke(colors.background, colors.border);
+            doc.fontSize(10).fillColor(colors.primary).font('Helvetica-Bold');
+            safeText('TECHNOLOGIES DETECTED', 60, y + 10);
+            doc.font('Helvetica').fontSize(8);
+
+            let techY = y + 30;
+            let techCol = 0;
+            techs.forEach((tech, i) => {
+                const x = 60 + (techCol * (contentWidth / 3));
+                doc.fillColor(colors.text);
+                safeText(`${tech.name}${tech.version ? ' ' + tech.version : ''}`, x, techY);
+                doc.fillColor(colors.lightText);
+                safeText(`(${tech.category || 'Other'})`, x + 100, techY);
+
+                techCol++;
+                if (techCol >= 3) {
+                    techCol = 0;
+                    techY += 25;
+                }
+            });
+
+            y += 35 + Math.ceil(techs.length / 3) * 25;
+        }
+
+        // Subdomains
+        const subs = recon.subdomains || [];
+        if (subs.length > 0) {
+            if (y > pageHeight - 120) {
+                doc.addPage();
+                y = 50;
+            }
+
+            doc.roundedRect(50, y, contentWidth, 25 + subs.length * 20, 3).fillAndStroke(colors.background, colors.border);
+            doc.fontSize(10).fillColor(colors.primary).font('Helvetica-Bold');
+            safeText('SUBDOMAINS DISCOVERED', 60, y + 10);
+            doc.font('Helvetica').fontSize(9);
+
+            let subY = y + 30;
+            subs.forEach(sub => {
+                doc.fillColor(colors.text);
+                safeText(sub.name, 60, subY);
+                doc.fillColor(colors.lightText);
+                safeText(sub.ip || 'N/A', 280, subY);
+                subY += 20;
+            });
+        }
+    }
+
     // ============ VULNERABILITIES ============
     doc.addPage();
     doc.rect(50, 40, contentWidth, 3).fill(colors.accent);
