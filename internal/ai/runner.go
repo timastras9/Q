@@ -226,6 +226,8 @@ func (r *AutoRunner) executeAction(ctx context.Context, decision *AIDecision) (*
 		return r.actionNucleiScan(ctx, action, decision)
 	case "xss_scan":
 		return r.actionXSSScan(ctx, action, decision)
+	case "nikto_scan":
+		return r.actionNiktoScan(ctx, action, decision)
 	default:
 		action.Result = fmt.Sprintf("Unknown action: %s", decision.Action)
 		action.Success = false
@@ -1748,6 +1750,91 @@ func (r *AutoRunner) actionXSSScan(ctx context.Context, action *Action, decision
 				Target:      decision.Target,
 				Description: "XSS vulnerability found",
 			})
+		}
+	}
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	return action, nil
+}
+
+// actionNiktoScan runs Nikto web scanner
+func (r *AutoRunner) actionNiktoScan(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	if err := r.framework.Use("auxiliary/scanner/http/nikto"); err != nil {
+		action.Result = fmt.Sprintf("Module error: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	module := r.framework.Current()
+
+	// Parse target URL
+	target := decision.Target
+	port := "80"
+
+	if strings.HasPrefix(target, "http://") {
+		target = strings.TrimPrefix(target, "http://")
+	} else if strings.HasPrefix(target, "https://") {
+		target = strings.TrimPrefix(target, "https://")
+		module.SetOption("SSL", "true")
+		port = "443"
+	}
+
+	if strings.Contains(target, ":") {
+		parts := strings.Split(target, ":")
+		target = parts[0]
+		portPath := parts[1]
+		if idx := strings.Index(portPath, "/"); idx != -1 {
+			port = portPath[:idx]
+		} else {
+			port = portPath
+		}
+	}
+
+	module.SetOption("RHOSTS", target)
+	module.SetOption("RPORT", port)
+
+	// Set shorter timeout for autopwn
+	module.SetOption("MAXTIME", "60")
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("Nikto scan failed: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	// Record findings
+	if result.Success {
+		if findings, ok := result.Data["findings"].([]exploit.NiktoFinding); ok {
+			for _, f := range findings {
+				severity := "info"
+				desc := strings.ToLower(f.Description)
+				if strings.Contains(desc, "vulnerab") || strings.Contains(desc, "exploit") {
+					severity = "high"
+				} else if strings.Contains(desc, "config") || strings.Contains(desc, "header") {
+					severity = "medium"
+				}
+
+				r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+					Type:        "nikto_" + f.Reference,
+					Severity:    severity,
+					Target:      decision.Target,
+					Description: f.Description,
+					Evidence:    fmt.Sprintf("%s %s", f.Method, f.URI),
+					Timestamp:   time.Now(),
+				})
+
+				if r.callbacks.OnFinding != nil {
+					r.callbacks.OnFinding(Finding{
+						Type:        "nikto_finding",
+						Severity:    severity,
+						Target:      decision.Target,
+						Description: f.Description,
+					})
+				}
+			}
 		}
 	}
 

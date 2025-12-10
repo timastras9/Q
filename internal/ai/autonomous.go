@@ -399,6 +399,19 @@ func (a *AutoPentester) GetNextAction(ctx context.Context, state *PentestState) 
 		}
 	}
 
+	// Phase 4b: Nikto scan all HTTP ports
+	for _, httpPort := range httpPorts {
+		webTarget := fmt.Sprintf("http://%s:%d", target, httpPort)
+		if !completedActions[fmt.Sprintf("nikto_scan:%s", webTarget)] {
+			return &AIDecision{
+				Action:    "nikto_scan",
+				Target:    webTarget,
+				Reasoning: fmt.Sprintf("Nikto web scan on port %d", httpPort),
+				RiskLevel: "medium",
+			}, nil
+		}
+	}
+
 	// Phase 5: XSS scan all HTTP ports
 	for _, httpPort := range httpPorts {
 		webTarget := fmt.Sprintf("http://%s:%d", target, httpPort)
@@ -660,7 +673,7 @@ Reply JSON:
 		"sqli_exploit": true, "complete": true, "full_scan": true,
 		"ssh_recon": true, "reverse_shell": true, "cred_spray": true,
 		"lfi_exploit": true, "ssrf_exploit": true, "file_upload": true,
-		"nuclei_scan": true, "xss_scan": true,
+		"nuclei_scan": true, "xss_scan": true, "nikto_scan": true,
 	}
 	if !validActions[decision.Action] {
 		decision.Action = "complete"
