@@ -1,0 +1,22 @@
+# Binaries
+pentestai
+*.exe
+
+# Environment files with secrets
+.env
+.env.local
+.env.*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test output
+*.log
+reports/
