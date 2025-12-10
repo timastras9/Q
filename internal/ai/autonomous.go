@@ -306,80 +306,178 @@ func (a *AutoPentester) GetNextAction(ctx context.Context, state *PentestState) 
 	// Deterministic exploitation sequence - force these first
 	target := state.Target
 
-	// Check discovered ports
-	hasPort8081 := false
-	hasPort8082 := false
+	// Discover ports dynamically
 	sshPorts := []int{}
+	httpPorts := []int{}
 
 	for _, p := range state.OpenPorts {
-		switch p.Port {
-		case 8081:
-			hasPort8081 = true
-		case 8082:
-			hasPort8082 = true
-		}
-		// Find all SSH ports
-		if p.Port == 22 || p.Port == 2222 || p.Port == 22022 {
+		// Find all SSH ports by common ports or service name
+		if p.Port == 22 || p.Port == 222 || p.Port == 2222 || p.Port == 22022 || p.Port == 2022 {
 			sshPorts = append(sshPorts, p.Port)
+		}
+		// Find all HTTP ports by common ports
+		if p.Port == 80 || p.Port == 443 || p.Port == 8080 || p.Port == 8081 || p.Port == 8082 || p.Port == 8000 || p.Port == 8443 || p.Port == 3000 || p.Port == 5000 || p.Port == 9000 {
+			httpPorts = append(httpPorts, p.Port)
 		}
 		// Also check by service name for non-standard ports
 		for _, svc := range state.Services {
-			if svc.Port == p.Port && svc.Name == "ssh" {
-				found := false
-				for _, sp := range sshPorts {
-					if sp == p.Port {
-						found = true
-						break
+			if svc.Port == p.Port {
+				if svc.Name == "ssh" {
+					found := false
+					for _, sp := range sshPorts {
+						if sp == p.Port {
+							found = true
+							break
+						}
+					}
+					if !found {
+						sshPorts = append(sshPorts, p.Port)
 					}
 				}
-				if !found {
-					sshPorts = append(sshPorts, p.Port)
+				if svc.Name == "http" || svc.Name == "https" || svc.Name == "http-proxy" || svc.Name == "http-alt" {
+					found := false
+					for _, hp := range httpPorts {
+						if hp == p.Port {
+							found = true
+							break
+						}
+					}
+					if !found {
+						httpPorts = append(httpPorts, p.Port)
+					}
 				}
 			}
 		}
 	}
 
-	// Phase 1: Full port scan if not done (scans all 65535 ports)
+	// Phase 1: Full port scan if not done
 	if !completedActions[fmt.Sprintf("full_scan:%s", target)] && !completedActions[fmt.Sprintf("scan_ports:%s", target)] {
 		return &AIDecision{
 			Action:    "full_scan",
 			Target:    target,
-			Reasoning: "Full port scan (1-65535) to discover all services including hidden SSH",
+			Reasoning: "Full port scan to discover all services",
 			RiskLevel: "low",
 		}, nil
 	}
 
-	// Phase 2: SQL injection on port 8081 (DVWA) - HIGH PRIORITY
-	if hasPort8081 && !completedActions[fmt.Sprintf("sqli_exploit:http://%s:8081", target)] {
-		return &AIDecision{
-			Action:    "sqli_exploit",
-			Target:    fmt.Sprintf("http://%s:8081", target),
-			Reasoning: "SQL injection to extract database credentials from DVWA",
-			RiskLevel: "high",
-		}, nil
+	// Phase 2: Web scan all HTTP ports first (discover vulns before exploiting)
+	for _, httpPort := range httpPorts {
+		webTarget := fmt.Sprintf("http://%s:%d", target, httpPort)
+		if !completedActions[fmt.Sprintf("web_scan:%s", webTarget)] {
+			return &AIDecision{
+				Action:    "web_scan",
+				Target:    webTarget,
+				Reasoning: fmt.Sprintf("Web vulnerability scan on port %d", httpPort),
+				RiskLevel: "medium",
+			}, nil
+		}
 	}
 
-	// Phase 3: Command injection on port 8081 (DVWA)
-	if hasPort8081 && !completedActions[fmt.Sprintf("cmd_inject:http://%s:8081", target)] {
-		return &AIDecision{
-			Action:    "cmd_inject",
-			Target:    fmt.Sprintf("http://%s:8081", target),
-			Reasoning: "Command injection for RCE on DVWA",
-			RiskLevel: "high",
-		}, nil
+	// Phase 3: Directory scan all HTTP ports
+	for _, httpPort := range httpPorts {
+		webTarget := fmt.Sprintf("http://%s:%d", target, httpPort)
+		if !completedActions[fmt.Sprintf("dir_scan:%s", webTarget)] {
+			return &AIDecision{
+				Action:    "dir_scan",
+				Target:    webTarget,
+				Reasoning: fmt.Sprintf("Directory enumeration on port %d", httpPort),
+				RiskLevel: "low",
+			}, nil
+		}
 	}
 
-	// Phase 4: SQL injection on port 8082 (bWAPP)
-	if hasPort8082 && !completedActions[fmt.Sprintf("sqli_exploit:http://%s:8082", target)] {
-		return &AIDecision{
-			Action:    "sqli_exploit",
-			Target:    fmt.Sprintf("http://%s:8082", target),
-			Reasoning: "SQL injection to extract database credentials from bWAPP",
-			RiskLevel: "high",
-		}, nil
+	// Phase 4: Nuclei CVE scan all HTTP ports
+	for _, httpPort := range httpPorts {
+		webTarget := fmt.Sprintf("http://%s:%d", target, httpPort)
+		if !completedActions[fmt.Sprintf("nuclei_scan:%s", webTarget)] {
+			return &AIDecision{
+				Action:    "nuclei_scan",
+				Target:    webTarget,
+				Reasoning: fmt.Sprintf("Nuclei CVE scan on port %d", httpPort),
+				RiskLevel: "medium",
+			}, nil
+		}
 	}
 
-	// Phase 5: SSH brute force on ALL discovered SSH ports
+	// Phase 5: XSS scan all HTTP ports
+	for _, httpPort := range httpPorts {
+		webTarget := fmt.Sprintf("http://%s:%d", target, httpPort)
+		if !completedActions[fmt.Sprintf("xss_scan:%s", webTarget)] {
+			return &AIDecision{
+				Action:    "xss_scan",
+				Target:    webTarget,
+				Reasoning: fmt.Sprintf("XSS vulnerability scan on port %d", httpPort),
+				RiskLevel: "medium",
+			}, nil
+		}
+	}
+
+	// Phase 6: SQL injection on all HTTP ports
+	for _, httpPort := range httpPorts {
+		webTarget := fmt.Sprintf("http://%s:%d", target, httpPort)
+		if !completedActions[fmt.Sprintf("sqli_exploit:%s", webTarget)] {
+			return &AIDecision{
+				Action:    "sqli_exploit",
+				Target:    webTarget,
+				Reasoning: fmt.Sprintf("SQL injection scan on port %d", httpPort),
+				RiskLevel: "high",
+			}, nil
+		}
+	}
+
+	// Phase 7: Command injection on all HTTP ports
+	for _, httpPort := range httpPorts {
+		webTarget := fmt.Sprintf("http://%s:%d", target, httpPort)
+		if !completedActions[fmt.Sprintf("cmd_inject:%s", webTarget)] {
+			return &AIDecision{
+				Action:    "cmd_inject",
+				Target:    webTarget,
+				Reasoning: fmt.Sprintf("Command injection scan on port %d", httpPort),
+				RiskLevel: "high",
+			}, nil
+		}
+	}
+
+	// Phase 8: LFI on all HTTP ports
+	for _, httpPort := range httpPorts {
+		webTarget := fmt.Sprintf("http://%s:%d", target, httpPort)
+		if !completedActions[fmt.Sprintf("lfi_exploit:%s", webTarget)] {
+			return &AIDecision{
+				Action:    "lfi_exploit",
+				Target:    webTarget,
+				Reasoning: fmt.Sprintf("Local File Inclusion scan on port %d", httpPort),
+				RiskLevel: "high",
+			}, nil
+		}
+	}
+
+	// Phase 9: SSRF on all HTTP ports
+	for _, httpPort := range httpPorts {
+		webTarget := fmt.Sprintf("http://%s:%d", target, httpPort)
+		if !completedActions[fmt.Sprintf("ssrf_exploit:%s", webTarget)] {
+			return &AIDecision{
+				Action:    "ssrf_exploit",
+				Target:    webTarget,
+				Reasoning: fmt.Sprintf("SSRF vulnerability scan on port %d", httpPort),
+				RiskLevel: "high",
+			}, nil
+		}
+	}
+
+	// Phase 10: File upload on all HTTP ports
+	for _, httpPort := range httpPorts {
+		webTarget := fmt.Sprintf("http://%s:%d", target, httpPort)
+		if !completedActions[fmt.Sprintf("file_upload:%s", webTarget)] {
+			return &AIDecision{
+				Action:    "file_upload",
+				Target:    webTarget,
+				Reasoning: fmt.Sprintf("File upload scan on port %d", httpPort),
+				RiskLevel: "high",
+			}, nil
+		}
+	}
+
+	// Phase 11: SSH brute force on ALL discovered SSH ports
 	for _, sshPort := range sshPorts {
 		sshTarget := fmt.Sprintf("%s:%d", target, sshPort)
 		if !completedActions[fmt.Sprintf("ssh_login:%s", sshTarget)] {
@@ -437,22 +535,7 @@ func (a *AutoPentester) GetNextAction(ctx context.Context, state *PentestState) 
 		}
 	}
 
-	// Phase 7: Web scan on discovered HTTP ports
-	for _, p := range state.OpenPorts {
-		if p.Port == 80 || p.Port == 443 || p.Port == 8080 || p.Port == 8081 || p.Port == 8082 {
-			webTarget := fmt.Sprintf("http://%s:%d", target, p.Port)
-			if !completedActions[fmt.Sprintf("web_scan:%s", webTarget)] {
-				return &AIDecision{
-					Action:    "web_scan",
-					Target:    webTarget,
-					Reasoning: fmt.Sprintf("Web vulnerability scan on port %d", p.Port),
-					RiskLevel: "medium",
-				}, nil
-			}
-		}
-	}
-
-	// Phase 8: Credential spraying - try found creds on all services
+	// Phase 15: Credential spraying - try found creds on all services
 	if len(state.Credentials) > 0 {
 		// Build list of services to spray
 		servicePorts := make(map[string]int)
@@ -467,9 +550,7 @@ func (a *AutoPentester) GetNextAction(ctx context.Context, state *PentestState) 
 					case "redis":
 						servicePorts["redis"] = p.Port
 					case "http", "http-proxy":
-						if p.Port != 8081 && p.Port != 8082 { // Skip already exploited
-							servicePorts["http"] = p.Port
-						}
+						servicePorts["http"] = p.Port
 					}
 				}
 			}
