@@ -12,12 +12,28 @@ import (
 )
 
 type ClaudeClient struct {
-	apiKey      string
-	baseURL     string
-	httpClient  *http.Client
-	model       string
-	lastRequest time.Time
-	minInterval time.Duration
+	apiKey       string
+	baseURL      string
+	httpClient   *http.Client
+	model        string
+	lastRequest  time.Time
+	minInterval  time.Duration
+	TotalInput   int     // Total input tokens used
+	TotalOutput  int     // Total output tokens used
+	RequestCount int     // Number of API requests made
+}
+
+// GetCost returns estimated cost in USD based on Claude Sonnet pricing
+// Input: $3/MTok, Output: $15/MTok
+func (c *ClaudeClient) GetCost() float64 {
+	inputCost := float64(c.TotalInput) / 1000000.0 * 3.0
+	outputCost := float64(c.TotalOutput) / 1000000.0 * 15.0
+	return inputCost + outputCost
+}
+
+// GetUsageStats returns usage statistics
+func (c *ClaudeClient) GetUsageStats() (inputTokens, outputTokens, requests int, cost float64) {
+	return c.TotalInput, c.TotalOutput, c.RequestCount, c.GetCost()
 }
 
 type Message struct {
@@ -227,6 +243,11 @@ func (c *ClaudeClient) sendRequest(ctx context.Context, req ClaudeRequest) (*Pen
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
+	// Track token usage
+	c.TotalInput += claudeResp.Usage.InputTokens
+	c.TotalOutput += claudeResp.Usage.OutputTokens
+	c.RequestCount++
+
 	if len(claudeResp.Content) == 0 {
 		return nil, fmt.Errorf("empty response from Claude")
 	}
@@ -289,6 +310,11 @@ func (c *ClaudeClient) Chat(ctx context.Context, messages []Message) (string, er
 	if err := json.Unmarshal(respBody, &claudeResp); err != nil {
 		return "", fmt.Errorf("failed to parse response: %w", err)
 	}
+
+	// Track token usage
+	c.TotalInput += claudeResp.Usage.InputTokens
+	c.TotalOutput += claudeResp.Usage.OutputTokens
+	c.RequestCount++
 
 	if len(claudeResp.Content) == 0 {
 		return "", fmt.Errorf("empty response from Claude")

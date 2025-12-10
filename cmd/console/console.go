@@ -850,6 +850,14 @@ func (c *Console) cmdAutoPwn(args []string) {
 				}
 				fmt.Println()
 			}
+
+			// Show API usage and cost
+			inputTok, outputTok, requests, cost := c.ai.GetUsageStats()
+			fmt.Printf("%sAPI Usage:%s\n", colorBold, colorReset)
+			fmt.Printf("  Requests: %d\n", requests)
+			fmt.Printf("  Input tokens: %d\n", inputTok)
+			fmt.Printf("  Output tokens: %d\n", outputTok)
+			fmt.Printf("  %sEstimated cost: $%.4f%s\n\n", colorGreen, cost, colorReset)
 		},
 	})
 
