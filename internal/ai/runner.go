@@ -232,6 +232,8 @@ func (r *AutoRunner) executeAction(ctx context.Context, decision *AIDecision) (*
 		return r.actionSubdomainEnum(ctx, action, decision)
 	case "ssl_scan":
 		return r.actionSSLScan(ctx, action, decision)
+	case "api_fuzz":
+		return r.actionAPIFuzz(ctx, action, decision)
 	default:
 		action.Result = fmt.Sprintf("Unknown action: %s", decision.Action)
 		action.Success = false
@@ -1993,6 +1995,94 @@ func (r *AutoRunner) actionSSLScan(ctx context.Context, action *Action, decision
 						Type:        "ssl_" + f.Type,
 						Severity:    f.Severity,
 						Target:      fmt.Sprintf("%s:%s", target, port),
+						Description: f.Description,
+					})
+				}
+			}
+		}
+	}
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	return action, nil
+}
+
+// actionAPIFuzz tests REST/GraphQL APIs for vulnerabilities
+func (r *AutoRunner) actionAPIFuzz(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	if err := r.framework.Use("auxiliary/scanner/api_fuzz"); err != nil {
+		action.Result = fmt.Sprintf("Module error: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	module := r.framework.Current()
+
+	// Parse target
+	target := decision.Target
+	port := "80"
+	ssl := "false"
+	basePath := "/api"
+
+	// Handle full URLs
+	if strings.HasPrefix(target, "https://") {
+		ssl = "true"
+		port = "443"
+		target = strings.TrimPrefix(target, "https://")
+	} else {
+		target = strings.TrimPrefix(target, "http://")
+	}
+
+	// Extract path if present
+	if idx := strings.Index(target, "/"); idx != -1 {
+		basePath = target[idx:]
+		target = target[:idx]
+	}
+
+	// Extract port if present
+	if strings.Contains(target, ":") {
+		parts := strings.Split(target, ":")
+		target = parts[0]
+		port = parts[1]
+	}
+
+	module.SetOption("RHOSTS", target)
+	module.SetOption("RPORT", port)
+	module.SetOption("SSL", ssl)
+	module.SetOption("TARGETURI", basePath)
+
+	if authToken := getOpt(decision.Options, "auth_token"); authToken != "" {
+		module.SetOption("AUTH_TOKEN", authToken)
+	}
+	if cookie := getOpt(decision.Options, "cookie"); cookie != "" {
+		module.SetOption("COOKIE", cookie)
+	}
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("API fuzzing failed: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	// Record API findings
+	if result.Success {
+		if findings, ok := result.Data["findings"].([]exploit.APIFinding); ok {
+			for _, f := range findings {
+				r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+					Type:        "api_" + f.Type,
+					Severity:    f.Severity,
+					Target:      fmt.Sprintf("%s:%s%s", target, port, f.Endpoint),
+					Description: f.Description,
+					Evidence:    f.Evidence,
+					Timestamp:   time.Now(),
+				})
+
+				if r.callbacks.OnFinding != nil {
+					r.callbacks.OnFinding(Finding{
+						Type:        "api_" + f.Type,
+						Severity:    f.Severity,
+						Target:      fmt.Sprintf("%s:%s%s", target, port, f.Endpoint),
 						Description: f.Description,
 					})
 				}
