@@ -230,6 +230,8 @@ func (r *AutoRunner) executeAction(ctx context.Context, decision *AIDecision) (*
 		return r.actionNiktoScan(ctx, action, decision)
 	case "subdomain_enum":
 		return r.actionSubdomainEnum(ctx, action, decision)
+	case "ssl_scan":
+		return r.actionSSLScan(ctx, action, decision)
 	default:
 		action.Result = fmt.Sprintf("Unknown action: %s", decision.Action)
 		action.Success = false
@@ -1919,6 +1921,81 @@ func (r *AutoRunner) actionSubdomainEnum(ctx context.Context, action *Action, de
 					Target:      domain,
 					Description: fmt.Sprintf("Found %d subdomains for %s", len(subdomains), domain),
 				})
+			}
+		}
+	}
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	return action, nil
+}
+
+// actionSSLScan analyzes SSL/TLS configuration
+func (r *AutoRunner) actionSSLScan(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	if err := r.framework.Use("auxiliary/scanner/ssl"); err != nil {
+		action.Result = fmt.Sprintf("Module error: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	module := r.framework.Current()
+
+	// Parse target
+	target := decision.Target
+	port := "443"
+
+	// Strip protocol if present
+	target = strings.TrimPrefix(target, "https://")
+	target = strings.TrimPrefix(target, "http://")
+
+	// Strip path if present
+	if idx := strings.Index(target, "/"); idx != -1 {
+		target = target[:idx]
+	}
+
+	// Extract port if present
+	if strings.Contains(target, ":") {
+		parts := strings.Split(target, ":")
+		target = parts[0]
+		port = parts[1]
+	}
+
+	module.SetOption("RHOSTS", target)
+	module.SetOption("RPORT", port)
+
+	if timeout := getOpt(decision.Options, "timeout"); timeout != "" {
+		module.SetOption("TIMEOUT", timeout)
+	}
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("SSL scan failed: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	// Record SSL findings
+	if result.Success {
+		if findings, ok := result.Data["findings"].([]exploit.SSLFinding); ok {
+			for _, f := range findings {
+				r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+					Type:        "ssl_" + f.Type,
+					Severity:    f.Severity,
+					Target:      fmt.Sprintf("%s:%s", target, port),
+					Description: f.Description,
+					Evidence:    f.Details,
+					Timestamp:   time.Now(),
+				})
+
+				if r.callbacks.OnFinding != nil {
+					r.callbacks.OnFinding(Finding{
+						Type:        "ssl_" + f.Type,
+						Severity:    f.Severity,
+						Target:      fmt.Sprintf("%s:%s", target, port),
+						Description: f.Description,
+					})
+				}
 			}
 		}
 	}
