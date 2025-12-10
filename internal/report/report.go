@@ -126,11 +126,30 @@ func (r *Report) ToMarkdown() string {
 	sb.WriteString(fmt.Sprintf("**Date:** %s\n\n", r.StartTime.Format("2006-01-02 15:04:05")))
 	sb.WriteString(fmt.Sprintf("**Duration:** %v\n\n", r.EndTime.Sub(r.StartTime).Round(time.Second)))
 
+	// CRITICAL: Exposed Credentials Section (shown first if any found)
+	if len(r.Credentials) > 0 {
+		sb.WriteString("## ⚠️ CRITICAL: EXPOSED CREDENTIALS ⚠️\n\n")
+		sb.WriteString("**The following credentials were extracted during testing. These represent a CRITICAL security risk.**\n\n")
+		sb.WriteString("| Username | Password | Type | Source |\n")
+		sb.WriteString("|----------|----------|------|--------|\n")
+		for _, cred := range r.Credentials {
+			pass := cred.Password
+			if pass == "" && cred.Hash != "" {
+				pass = cred.Hash[:min(20, len(cred.Hash))] + "... (hash)"
+			}
+			sb.WriteString(fmt.Sprintf("| **%s** | `%s` | %s | %s |\n",
+				cred.Username, pass, cred.Type, cred.Source))
+		}
+		sb.WriteString("\n**Immediate Action Required:** All exposed passwords must be changed immediately.\n\n")
+		sb.WriteString("---\n\n")
+	}
+
 	// Executive Summary
 	sb.WriteString("## Executive Summary\n\n")
 	sb.WriteString(fmt.Sprintf("| Metric | Value |\n"))
 	sb.WriteString(fmt.Sprintf("|--------|-------|\n"))
 	sb.WriteString(fmt.Sprintf("| Overall Risk Rating | **%s** |\n", r.Executive.RiskRating))
+	sb.WriteString(fmt.Sprintf("| Credentials Exposed | **%d** |\n", len(r.Credentials)))
 	sb.WriteString(fmt.Sprintf("| Total Hosts | %d |\n", r.Executive.TotalHosts))
 	sb.WriteString(fmt.Sprintf("| Open Ports | %d |\n", r.Executive.TotalPorts))
 	sb.WriteString(fmt.Sprintf("| Critical Findings | %d |\n", r.Executive.CriticalFindings))
@@ -272,6 +291,25 @@ func (r *Report) ToHTML() string {
 	sb.WriteString(fmt.Sprintf("<h1>%s</h1>\n", r.Title))
 	sb.WriteString(fmt.Sprintf("<p><strong>Target:</strong> %s</p>\n", r.Target))
 	sb.WriteString(fmt.Sprintf("<p><strong>Date:</strong> %s</p>\n", r.StartTime.Format("2006-01-02 15:04:05")))
+
+	// CRITICAL: Credentials at top if found
+	if len(r.Credentials) > 0 {
+		sb.WriteString(`<div style="background:#ffebee;border:3px solid #d32f2f;border-radius:8px;padding:20px;margin:20px 0;">`)
+		sb.WriteString(`<h2 style="color:#d32f2f;margin-top:0;">⚠️ CRITICAL: EXPOSED CREDENTIALS</h2>`)
+		sb.WriteString(`<p><strong>The following credentials were extracted during testing. These represent a CRITICAL security risk.</strong></p>`)
+		sb.WriteString("<table style=\"background:white;\">\n<tr><th>Username</th><th>Password</th><th>Type</th><th>Source</th></tr>\n")
+		for _, cred := range r.Credentials {
+			pass := cred.Password
+			if pass == "" && cred.Hash != "" {
+				pass = cred.Hash[:min(20, len(cred.Hash))] + "..."
+			}
+			sb.WriteString(fmt.Sprintf("<tr><td><strong>%s</strong></td><td><code style=\"background:#fff3e0;padding:2px 6px;\">%s</code></td><td>%s</td><td>%s</td></tr>\n",
+				cred.Username, pass, cred.Type, cred.Source))
+		}
+		sb.WriteString("</table>\n")
+		sb.WriteString(`<p style="color:#d32f2f;font-weight:bold;margin-bottom:0;">⚡ Immediate Action Required: All exposed passwords must be changed immediately.</p>`)
+		sb.WriteString("</div>\n")
+	}
 
 	// Summary boxes
 	sb.WriteString(`<div class="summary-box">`)

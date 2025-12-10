@@ -77,11 +77,12 @@ func (s *Scanner) SetConcurrency(c int) {
 	s.concurrency = c
 }
 
-// DefaultPorts returns common ports to scan
+// DefaultPorts returns common ports to scan including web apps
 func DefaultPorts() []int {
 	return []int{
 		21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 143, 443, 445, 993, 995,
-		1433, 1521, 1723, 2222, 3306, 3389, 5432, 5900, 5985, 6379, 8000, 8080, 8443, 8888, 9090, 22022, 27017,
+		1433, 1521, 1723, 2222, 3306, 3389, 5432, 5900, 5985, 6379, 8000, 8080,
+		8081, 8082, 8443, 8888, 9090, 22022, 27017,
 	}
 }
 
@@ -92,6 +93,108 @@ func AllPorts() []int {
 		ports[i] = i + 1
 	}
 	return ports
+}
+
+// FastFullScan scans top 1000 ports with high concurrency for speed
+func (s *Scanner) FastFullScan(ctx context.Context, target string) (*Host, error) {
+	host := &Host{
+		IP:    target,
+		State: "down",
+	}
+
+	// Resolve hostname
+	names, err := net.LookupAddr(target)
+	if err == nil && len(names) > 0 {
+		host.Hostname = strings.TrimSuffix(names[0], ".")
+	}
+
+	// Check if target is remote (not localhost)
+	isRemote := !strings.HasPrefix(target, "127.") && target != "localhost"
+
+	// Use appropriate settings for local vs remote
+	concurrency := 500
+	timeout := 500 * time.Millisecond
+	if isRemote {
+		// Remote hosts need longer timeout but fewer concurrent connections
+		concurrency = 200
+		timeout = 2 * time.Second
+	}
+
+	// Get top 1000 ports (covers 99%+ of services)
+	ports := TopPorts(1000)
+
+	// Add common SSH ports that might not be in top 1000
+	sshPorts := []int{22, 222, 2222, 22022, 2022, 22222, 20022, 10022}
+	portSet := make(map[int]bool)
+	for _, p := range ports {
+		portSet[p] = true
+	}
+	for _, p := range sshPorts {
+		if !portSet[p] {
+			ports = append(ports, p)
+		}
+	}
+
+	// Channel for ports to scan
+	portChan := make(chan int, len(ports))
+	resultChan := make(chan Port, len(ports))
+
+	// Worker pool
+	var wg sync.WaitGroup
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for port := range portChan {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					address := fmt.Sprintf("%s:%d", target, port)
+					dialer := net.Dialer{Timeout: timeout}
+
+					conn, err := dialer.DialContext(ctx, "tcp", address)
+					if err == nil {
+						conn.Close()
+						result := Port{
+							Number:   port,
+							Protocol: "tcp",
+							State:    "open",
+							Service:  identifyService(port),
+						}
+						resultChan <- result
+					}
+				}
+			}
+		}()
+	}
+
+	// Send top 1000 ports to workers
+	go func() {
+		for _, port := range ports {
+			portChan <- port
+		}
+		close(portChan)
+	}()
+
+	// Wait for completion
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
+
+	// Collect results
+	for port := range resultChan {
+		host.Ports = append(host.Ports, port)
+		host.State = "up"
+	}
+
+	// Sort ports
+	sort.Slice(host.Ports, func(i, j int) bool {
+		return host.Ports[i].Number < host.Ports[j].Number
+	})
+
+	return host, nil
 }
 
 // TopPorts returns the most commonly open ports
@@ -441,6 +544,8 @@ func identifyService(port int) Service {
 		5985:  {Name: "winrm"},
 		6379:  {Name: "redis"},
 		8080:  {Name: "http-proxy"},
+		8081:  {Name: "http-dvwa", Product: "DVWA"},  // DVWA vulnerable app
+		8082:  {Name: "http-bwapp", Product: "bWAPP"}, // bWAPP vulnerable app
 		8443:  {Name: "https-alt"},
 		22022: {Name: "ssh"}, // Common alternate SSH port
 		27017: {Name: "mongodb"},

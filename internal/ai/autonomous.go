@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"pentestai/internal/exploit"
 )
 
 // AutoPentester runs autonomous penetration tests guided by AI
@@ -18,6 +20,7 @@ type AutoPentester struct {
 	credentials []CredentialFind
 	sessions    []SessionInfo
 	history     []Action
+	exploitDB   *exploit.ExploitDatabase // RAG exploit database
 }
 
 type Finding struct {
@@ -112,7 +115,69 @@ func NewAutoPentester(client *ClaudeClient) *AutoPentester {
 		maxDepth:   5,
 		maxActions: 50,
 		verbose:    true,
+		exploitDB:  exploit.NewExploitDatabase(), // Initialize RAG exploit database
 	}
+}
+
+// SetExploitDB sets a custom exploit database
+func (a *AutoPentester) SetExploitDB(db *exploit.ExploitDatabase) {
+	a.exploitDB = db
+}
+
+// convertServicesToDiscovery converts ServiceInfo to exploit.ServiceDiscovery for RAG queries
+func (a *AutoPentester) convertServicesToDiscovery(services []ServiceInfo) []exploit.ServiceDiscovery {
+	var discoveries []exploit.ServiceDiscovery
+	for _, svc := range services {
+		discoveries = append(discoveries, exploit.ServiceDiscovery{
+			Host:    svc.Host,
+			Port:    svc.Port,
+			Name:    svc.Name,
+			Product: svc.Product,
+			Version: svc.Version,
+			Banner:  svc.Banner,
+		})
+	}
+	return discoveries
+}
+
+// getExploitRecommendations queries the RAG exploit database for recommendations
+func (a *AutoPentester) getExploitRecommendations(state *PentestState) string {
+	if a.exploitDB == nil || len(state.Services) == 0 {
+		return ""
+	}
+
+	discoveries := a.convertServicesToDiscovery(state.Services)
+	recommendations := a.exploitDB.GetRecommendations(discoveries)
+
+	if len(recommendations) == 0 {
+		return ""
+	}
+
+	// Format recommendations for AI context
+	var sb strings.Builder
+	sb.WriteString("\n\nEXPLOIT DATABASE RECOMMENDATIONS:\n")
+
+	for i, rec := range recommendations {
+		if i >= 5 { // Limit to top 5 recommendations
+			break
+		}
+		sb.WriteString(fmt.Sprintf("- %s (", rec.Exploit.Name))
+		if len(rec.Exploit.CVE) > 0 {
+			sb.WriteString(strings.Join(rec.Exploit.CVE, ","))
+		} else {
+			sb.WriteString(rec.Exploit.Type)
+		}
+		sb.WriteString(fmt.Sprintf(") -> %s:%d [%s] %.0f%% confidence\n",
+			rec.Target, rec.Port, rec.Exploit.Severity, rec.Confidence*100))
+		if rec.Exploit.Module != "" {
+			sb.WriteString(fmt.Sprintf("  Module: %s\n", rec.Exploit.Module))
+		}
+		if rec.Exploit.Payload != "" {
+			sb.WriteString(fmt.Sprintf("  Payload: %s\n", rec.Exploit.Payload))
+		}
+	}
+
+	return sb.String()
 }
 
 func (a *AutoPentester) SetMaxDepth(depth int) {
@@ -213,34 +278,251 @@ func (a *AutoPentester) compactState(state *PentestState) string {
 
 // GetNextAction asks AI to decide the next action based on current state
 func (a *AutoPentester) GetNextAction(ctx context.Context, state *PentestState) (*AIDecision, error) {
-	// Create compact state summary to minimize tokens
+	// Build a set of completed actions to track what's been done
+	completedActions := make(map[string]bool)
+	sshCredentials := make(map[string]CredentialFind) // Track SSH creds for recon
+	sshReuseAttempted := make(map[string]bool)        // Track password reuse attempts
+
+	for _, action := range state.ActionHistory {
+		key := fmt.Sprintf("%s:%s", action.Type, action.Target)
+		completedActions[key] = true
+
+		// Track password reuse attempts by checking options
+		if action.Type == "ssh_login" && action.Options != nil {
+			if reuseUser, ok := action.Options["reuse"]; ok {
+				reuseKey := fmt.Sprintf("%s:%v", action.Target, reuseUser)
+				sshReuseAttempted[reuseKey] = true
+			}
+		}
+	}
+
+	// Track SSH credentials from state
+	for _, cred := range state.Credentials {
+		if cred.Service == "ssh" {
+			sshCredentials[cred.Target] = cred
+		}
+	}
+
+	// Deterministic exploitation sequence - force these first
+	target := state.Target
+
+	// Check discovered ports
+	hasPort8081 := false
+	hasPort8082 := false
+	sshPorts := []int{}
+
+	for _, p := range state.OpenPorts {
+		switch p.Port {
+		case 8081:
+			hasPort8081 = true
+		case 8082:
+			hasPort8082 = true
+		}
+		// Find all SSH ports
+		if p.Port == 22 || p.Port == 2222 || p.Port == 22022 {
+			sshPorts = append(sshPorts, p.Port)
+		}
+		// Also check by service name for non-standard ports
+		for _, svc := range state.Services {
+			if svc.Port == p.Port && svc.Name == "ssh" {
+				found := false
+				for _, sp := range sshPorts {
+					if sp == p.Port {
+						found = true
+						break
+					}
+				}
+				if !found {
+					sshPorts = append(sshPorts, p.Port)
+				}
+			}
+		}
+	}
+
+	// Phase 1: Full port scan if not done (scans all 65535 ports)
+	if !completedActions[fmt.Sprintf("full_scan:%s", target)] && !completedActions[fmt.Sprintf("scan_ports:%s", target)] {
+		return &AIDecision{
+			Action:    "full_scan",
+			Target:    target,
+			Reasoning: "Full port scan (1-65535) to discover all services including hidden SSH",
+			RiskLevel: "low",
+		}, nil
+	}
+
+	// Phase 2: SQL injection on port 8081 (DVWA) - HIGH PRIORITY
+	if hasPort8081 && !completedActions[fmt.Sprintf("sqli_exploit:http://%s:8081", target)] {
+		return &AIDecision{
+			Action:    "sqli_exploit",
+			Target:    fmt.Sprintf("http://%s:8081", target),
+			Reasoning: "SQL injection to extract database credentials from DVWA",
+			RiskLevel: "high",
+		}, nil
+	}
+
+	// Phase 3: Command injection on port 8081 (DVWA)
+	if hasPort8081 && !completedActions[fmt.Sprintf("cmd_inject:http://%s:8081", target)] {
+		return &AIDecision{
+			Action:    "cmd_inject",
+			Target:    fmt.Sprintf("http://%s:8081", target),
+			Reasoning: "Command injection for RCE on DVWA",
+			RiskLevel: "high",
+		}, nil
+	}
+
+	// Phase 4: SQL injection on port 8082 (bWAPP)
+	if hasPort8082 && !completedActions[fmt.Sprintf("sqli_exploit:http://%s:8082", target)] {
+		return &AIDecision{
+			Action:    "sqli_exploit",
+			Target:    fmt.Sprintf("http://%s:8082", target),
+			Reasoning: "SQL injection to extract database credentials from bWAPP",
+			RiskLevel: "high",
+		}, nil
+	}
+
+	// Phase 5: SSH brute force on ALL discovered SSH ports
+	for _, sshPort := range sshPorts {
+		sshTarget := fmt.Sprintf("%s:%d", target, sshPort)
+		if !completedActions[fmt.Sprintf("ssh_login:%s", sshTarget)] {
+			return &AIDecision{
+				Action:    "ssh_login",
+				Target:    sshTarget,
+				Reasoning: fmt.Sprintf("SSH brute force on port %d", sshPort),
+				RiskLevel: "high",
+			}, nil
+		}
+	}
+
+	// Phase 6: SSH RECON - after successful SSH login, do post-exploitation
+	for sshTarget, cred := range sshCredentials {
+		reconKey := fmt.Sprintf("ssh_recon:%s", sshTarget)
+		if !completedActions[reconKey] {
+			return &AIDecision{
+				Action:    "ssh_recon",
+				Target:    sshTarget,
+				Reasoning: fmt.Sprintf("Post-exploitation recon as %s to demonstrate impact", cred.Username),
+				RiskLevel: "high",
+				Options: map[string]interface{}{
+					"username": cred.Username,
+					"password": cred.Password,
+				},
+			}, nil
+		}
+	}
+
+	// Phase 6b: Try SQLi credentials on SSH (password reuse attack) - LIMIT TO 3 ATTEMPTS
+	maxReuseAttempts := 3
+	reuseCount := len(sshReuseAttempted)
+	if len(sshPorts) > 0 && reuseCount < maxReuseAttempts {
+		for _, cred := range state.Credentials {
+			if cred.Service == "sqli_dump" && cred.Password != "" {
+				for _, sshPort := range sshPorts {
+					sshTarget := fmt.Sprintf("%s:%d", target, sshPort)
+					reuseKey := fmt.Sprintf("%s:%s", sshTarget, cred.Username)
+
+					if !sshReuseAttempted[reuseKey] && reuseCount < maxReuseAttempts {
+						return &AIDecision{
+							Action:    "ssh_login",
+							Target:    sshTarget,
+							Reasoning: fmt.Sprintf("Password reuse attack - trying %s's database password on SSH", cred.Username),
+							RiskLevel: "high",
+							Options: map[string]interface{}{
+								"username": cred.Username,
+								"password": cred.Password,
+								"reuse":    cred.Username,
+							},
+						}, nil
+					}
+				}
+			}
+		}
+	}
+
+	// Phase 7: Web scan on discovered HTTP ports
+	for _, p := range state.OpenPorts {
+		if p.Port == 80 || p.Port == 443 || p.Port == 8080 || p.Port == 8081 || p.Port == 8082 {
+			webTarget := fmt.Sprintf("http://%s:%d", target, p.Port)
+			if !completedActions[fmt.Sprintf("web_scan:%s", webTarget)] {
+				return &AIDecision{
+					Action:    "web_scan",
+					Target:    webTarget,
+					Reasoning: fmt.Sprintf("Web vulnerability scan on port %d", p.Port),
+					RiskLevel: "medium",
+				}, nil
+			}
+		}
+	}
+
+	// Phase 8: Credential spraying - try found creds on all services
+	if len(state.Credentials) > 0 {
+		// Build list of services to spray
+		servicePorts := make(map[string]int)
+		for _, p := range state.OpenPorts {
+			for _, svc := range state.Services {
+				if svc.Port == p.Port {
+					switch svc.Name {
+					case "ftp":
+						servicePorts["ftp"] = p.Port
+					case "mysql":
+						servicePorts["mysql"] = p.Port
+					case "redis":
+						servicePorts["redis"] = p.Port
+					case "http", "http-proxy":
+						if p.Port != 8081 && p.Port != 8082 { // Skip already exploited
+							servicePorts["http"] = p.Port
+						}
+					}
+				}
+			}
+		}
+
+		// Try each credential on each service
+		for _, cred := range state.Credentials {
+			if cred.Password == "" {
+				continue
+			}
+			for svcName, port := range servicePorts {
+				sprayKey := fmt.Sprintf("cred_spray:%s:%s:%d", cred.Username, svcName, port)
+				if !completedActions[sprayKey] {
+					return &AIDecision{
+						Action:    "cred_spray",
+						Target:    fmt.Sprintf("%s:%d", target, port),
+						Reasoning: fmt.Sprintf("Credential spray - trying %s on %s:%d", cred.Username, svcName, port),
+						RiskLevel: "medium",
+						Options: map[string]interface{}{
+							"username": cred.Username,
+							"password": cred.Password,
+							"service":  svcName,
+						},
+					}, nil
+				}
+			}
+		}
+	}
+
+	// If all exploitation done, use AI for additional discovery
 	summary := a.compactState(state)
 
-	prompt := fmt.Sprintf(`Pentest AI. Pick next action. Goal: gain access, find vulns, exploit them.
+	// Get RAG exploit recommendations for AI context
+	exploitRecs := a.getExploitRecommendations(state)
+
+	prompt := fmt.Sprintf(`Pentest AI. EXPLOITATION phase complete. Find additional attack vectors.
 
 STATE:%s
+%s
+Completed: sqli_exploit, cmd_inject, ssh_login, ssh_recon on main targets.
 
-ACTIONS:
-- scan_ports: initial recon (target=ip)
-- service_scan: get banner (target=ip:port)
-- web_scan: find SQLi/XSS/vulns (target=http://ip:port)
-- dir_scan: find hidden paths (target=http://ip:port)
-- cmd_inject: exploit command injection for RCE (target=http://ip:port, options: uri=/vulnerabilities/exec/, cmd=id)
-- sqli_exploit: exploit SQL injection (target=http://ip:port, options: uri=/vulnerabilities/sqli/)
-- ssh_login: bruteforce SSH creds (target=ip:port, use port 2222/22022 if found)
-- ssh_exec: run cmd with creds (target=ip:port, options: username,password,cmd)
-- ftp_anon: check anon FTP (target=ip)
-- redis_check: check unauth Redis (target=ip)
-- complete: done testing
+REMAINING ACTIONS:
+- dir_scan: directory enumeration (target=http://ip:port)
+- service_scan: banner grab (target=ip:port)
+- ftp_anon: check anonymous FTP (target=ip)
+- redis_check: check unauthenticated Redis (target=ip)
+- reverse_shell: generate reverse shell payloads (target=ip, lhost=attacker_ip, lport=port)
+- complete: all done
 
-PRIORITY:
-1. If SSH on 22/2222/22022, try ssh_login immediately
-2. If HTTP 8081 (DVWA) found, try cmd_inject and sqli_exploit
-3. If HTTP 8082 (bWAPP) found, try cmd_inject
-4. After finding vulns, EXPLOIT them to show customer the risk
+Use EXPLOIT DATABASE RECOMMENDATIONS above to prioritize high-confidence exploits.
 
-Reply JSON only:
-{"action":"x","target":"ip:port","options":{"key":"val"},"reasoning":"brief","risk_level":"low|med|high"}`, summary)
+Reply JSON:
+{"action":"x","target":"ip:port","reasoning":"brief","risk_level":"low|med|high"}`, summary, exploitRecs)
 
 	messages := []Message{
 		{Role: "user", Content: prompt},
@@ -289,7 +571,8 @@ Reply JSON only:
 		"web_scan": true, "dir_scan": true, "ssh_login": true,
 		"ssh_exec": true, "ftp_login": true, "ftp_anon": true,
 		"http_login": true, "redis_check": true, "cmd_inject": true,
-		"sqli_exploit": true, "complete": true,
+		"sqli_exploit": true, "complete": true, "full_scan": true,
+		"ssh_recon": true, "reverse_shell": true, "cred_spray": true,
 	}
 	if !validActions[decision.Action] {
 		decision.Action = "complete"

