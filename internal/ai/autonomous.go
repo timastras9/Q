@@ -616,6 +616,7 @@ REMAINING ACTIONS:
 - nuclei_scan: run Nuclei CVE scanner (target=http://ip:port, templates=cves,critical, severity=critical,high)
 - xss_scan: test for XSS vulnerabilities (target=http://ip:port, uri=/search?q=)
 - reverse_shell: generate reverse shell payloads (target=ip, lhost=attacker_ip, lport=port)
+- subdomain_enum: enumerate subdomains (target=domain.com, timeout=60, threads=10)
 - complete: all done
 
 Use EXPLOIT DATABASE RECOMMENDATIONS above to prioritize high-confidence exploits.
@@ -674,6 +675,7 @@ Reply JSON:
 		"ssh_recon": true, "reverse_shell": true, "cred_spray": true,
 		"lfi_exploit": true, "ssrf_exploit": true, "file_upload": true,
 		"nuclei_scan": true, "xss_scan": true, "nikto_scan": true,
+		"subdomain_enum": true,
 	}
 	if !validActions[decision.Action] {
 		decision.Action = "complete"

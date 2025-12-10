@@ -228,6 +228,8 @@ func (r *AutoRunner) executeAction(ctx context.Context, decision *AIDecision) (*
 		return r.actionXSSScan(ctx, action, decision)
 	case "nikto_scan":
 		return r.actionNiktoScan(ctx, action, decision)
+	case "subdomain_enum":
+		return r.actionSubdomainEnum(ctx, action, decision)
 	default:
 		action.Result = fmt.Sprintf("Unknown action: %s", decision.Action)
 		action.Success = false
@@ -1834,6 +1836,89 @@ func (r *AutoRunner) actionNiktoScan(ctx context.Context, action *Action, decisi
 						Description: f.Description,
 					})
 				}
+			}
+		}
+	}
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	return action, nil
+}
+
+// actionSubdomainEnum enumerates subdomains using subfinder
+func (r *AutoRunner) actionSubdomainEnum(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	if err := r.framework.Use("auxiliary/gather/subdomain_enum"); err != nil {
+		action.Result = fmt.Sprintf("Module error: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	module := r.framework.Current()
+
+	// Get domain from target
+	domain := decision.Target
+
+	// Strip protocol if present
+	domain = strings.TrimPrefix(domain, "http://")
+	domain = strings.TrimPrefix(domain, "https://")
+
+	// Strip port if present
+	if idx := strings.Index(domain, ":"); idx != -1 {
+		domain = domain[:idx]
+	}
+
+	// Strip path if present
+	if idx := strings.Index(domain, "/"); idx != -1 {
+		domain = domain[:idx]
+	}
+
+	module.SetOption("DOMAIN", domain)
+
+	if timeout := getOpt(decision.Options, "timeout"); timeout != "" {
+		module.SetOption("TIMEOUT", timeout)
+	}
+	if threads := getOpt(decision.Options, "threads"); threads != "" {
+		module.SetOption("THREADS", threads)
+	}
+	if recursive := getOpt(decision.Options, "recursive"); recursive != "" {
+		module.SetOption("RECURSIVE", recursive)
+	}
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("Subdomain enumeration failed: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	// Record subdomains as potential hosts
+	if result.Success {
+		if subdomains, ok := result.Data["subdomains"].([]string); ok {
+			for _, subdomain := range subdomains {
+				r.state.DiscoveredHosts = append(r.state.DiscoveredHosts, HostInfo{
+					Hostname: subdomain,
+					Status:   "discovered",
+				})
+			}
+
+			// Add finding for discovered subdomains
+			r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+				Type:        "subdomain_discovery",
+				Severity:    "info",
+				Target:      domain,
+				Description: fmt.Sprintf("Discovered %d subdomains", len(subdomains)),
+				Evidence:    strings.Join(subdomains, "\n"),
+				Timestamp:   time.Now(),
+			})
+
+			if r.callbacks.OnFinding != nil {
+				r.callbacks.OnFinding(Finding{
+					Type:        "subdomain_discovery",
+					Severity:    "info",
+					Target:      domain,
+					Description: fmt.Sprintf("Found %d subdomains for %s", len(subdomains), domain),
+				})
 			}
 		}
 	}
