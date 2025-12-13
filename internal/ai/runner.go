@@ -45,7 +45,7 @@ func NewAutoRunner(client *ClaudeClient) *AutoRunner {
 		state: &PentestState{
 			Phase: "initialization",
 		},
-		maxActions: 25, // Default max actions
+		maxActions: 100, // Default max actions
 	}
 }
 

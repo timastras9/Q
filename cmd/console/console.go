@@ -738,7 +738,7 @@ func (c *Console) cmdAutoPwn(args []string) {
 	}
 
 	target := args[0]
-	maxActions := 25
+	maxActions := 100
 
 	for i := 1; i < len(args); i++ {
 		if args[i] == "--max-actions" && i+1 < len(args) {
