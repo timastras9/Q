@@ -390,34 +390,35 @@ DATABASE/SERVICE CHECKS - Check these first, often misconfigured!
 - postgres_check: Check PostgreSQL default creds (target=ip:5432)
 - ftp_anon: Check FTP anonymous login (target=ip) - port 21
 
-WEB RECONNAISSANCE
+CREDENTIAL ATTACKS - Try default/common creds on services!
+- ssh_login: SSH brute force with common creds (target=ip:port) - ALWAYS try on SSH ports!
+- service_scan: Grab service banners to identify versions (target=ip:port)
+
+WEB RECONNAISSANCE - Scan EVERY HTTP port!
 - web_scan: Scan web app for vulnerabilities (target=http://ip:port)
 - dir_scan: Find hidden directories/files (target=http://ip:port)
 - api_fuzz: Discover API endpoints, test auth bypass (target=http://ip:port)
 
-WEB EXPLOITATION - Try these on interesting web services
-- sqli_exploit: SQL injection to extract data (target=http://ip:port)
+WEB EXPLOITATION - Try on ALL web ports (80, 443, 3000, 5000, 8080, 8081, etc)
+- sqli_exploit: SQL injection to extract data (target=http://ip:port) - TRY ON EVERY HTTP PORT
 - cmd_inject: Command injection for RCE (target=http://ip:port)
 - lfi_exploit: Local file inclusion (target=http://ip:port)
 - xss_scan: Cross-site scripting (target=http://ip:port)
 
-NETWORK SERVICES
-- ssh_login: SSH credential brute force (target=ip:port)
-- service_scan: Grab service banners (target=ip:port)
-
 POST-EXPLOITATION - After finding credentials
 - crack_hash: Crack password hashes (target=hash_value, hash_type=md5)
-- ssh_recon: Run commands on compromised SSH (requires username/password options)
-- cred_spray: Try found creds on other services (target=ip:port, service=mysql, username=x, password=y)
+- ssh_recon: Run commands on compromised SSH (target=ip:port, options: username, password)
+- cred_spray: Try creds on other services (target=ip:port, options: service, username, password)
 
-- complete: Finished - use when you've thoroughly tested everything
+- complete: ONLY use when you've tested ALL open ports thoroughly
 
 STRATEGY:
-1. FIRST check databases/services for no-auth (Redis, MongoDB) - these are quick wins
-2. Look at each open port and think "what could be vulnerable here?"
-3. If you find credentials, try to crack them and reuse them
-4. Don't just scan - EXPLOIT what you find
-5. Be thorough - a real pentest checks everything
+1. Check databases/services for no-auth FIRST (Redis, MongoDB, FTP anon)
+2. Try SSH login on ALL SSH ports (22, 2222, etc) with common credentials
+3. Run sqli_exploit on EVERY HTTP port - this often finds credentials!
+4. If you find password hashes, crack them immediately
+5. Try found credentials on other services (SSH, MySQL, etc)
+6. DON'T complete until you've tried exploits on ALL HTTP ports!
 
 Reply JSON only (pick ONE action):
 {"action":"x","target":"ip:port","reasoning":"why this matters","risk_level":"low|med|high"}`, summary, exploitRecs, strings.Join(completedList, ", "))
