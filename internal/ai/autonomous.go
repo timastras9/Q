@@ -360,327 +360,67 @@ func (a *AutoPentester) GetNextAction(ctx context.Context, state *PentestState) 
 		}, nil
 	}
 
-	// Phase 1b: Check critical services for default/no credentials FIRST
-	// Redis - often unauthenticated
-	for _, p := range state.OpenPorts {
-		if p.Port == 6379 {
-			if !completedActions[fmt.Sprintf("redis_check:%s", target)] {
-				return &AIDecision{
-					Action:    "redis_check",
-					Target:    target,
-					Reasoning: "Check Redis for unauthenticated access - critical finding",
-					RiskLevel: "low",
-				}, nil
-			}
-		}
+	// After port scan, let AI drive all decisions based on findings
+	// Build list of completed actions for context
+	var completedList []string
+	for key := range completedActions {
+		completedList = append(completedList, key)
 	}
-
-	// FTP anonymous login
-	for _, p := range state.OpenPorts {
-		if p.Port == 21 {
-			if !completedActions[fmt.Sprintf("ftp_anon:%s", target)] {
-				return &AIDecision{
-					Action:    "ftp_anon",
-					Target:    target,
-					Reasoning: "Check FTP for anonymous login",
-					RiskLevel: "low",
-				}, nil
-			}
-		}
-	}
-
-	// Phase 2: Web scan all HTTP ports first (discover vulns before exploiting)
-	for _, httpPort := range httpPorts {
-		webTarget := fmt.Sprintf("http://%s:%d", target, httpPort)
-		if !completedActions[fmt.Sprintf("web_scan:%s", webTarget)] {
-			return &AIDecision{
-				Action:    "web_scan",
-				Target:    webTarget,
-				Reasoning: fmt.Sprintf("Web vulnerability scan on port %d", httpPort),
-				RiskLevel: "medium",
-			}, nil
-		}
-	}
-
-	// Phase 2b: SSL/TLS analysis on all HTTPS ports (443, 8443) and HTTP ports
-	for _, httpPort := range httpPorts {
-		sslTarget := fmt.Sprintf("%s:%d", target, httpPort)
-		if !completedActions[fmt.Sprintf("ssl_scan:%s", sslTarget)] {
-			return &AIDecision{
-				Action:    "ssl_scan",
-				Target:    sslTarget,
-				Reasoning: fmt.Sprintf("SSL/TLS configuration analysis on port %d", httpPort),
-				RiskLevel: "low",
-			}, nil
-		}
-	}
-
-	// Phase 3: Directory scan all HTTP ports
-	for _, httpPort := range httpPorts {
-		webTarget := fmt.Sprintf("http://%s:%d", target, httpPort)
-		if !completedActions[fmt.Sprintf("dir_scan:%s", webTarget)] {
-			return &AIDecision{
-				Action:    "dir_scan",
-				Target:    webTarget,
-				Reasoning: fmt.Sprintf("Directory enumeration on port %d", httpPort),
-				RiskLevel: "low",
-			}, nil
-		}
-	}
-
-	// Phase 3b: API fuzzing on all HTTP ports (test REST/GraphQL endpoints)
-	for _, httpPort := range httpPorts {
-		webTarget := fmt.Sprintf("http://%s:%d", target, httpPort)
-		if !completedActions[fmt.Sprintf("api_fuzz:%s", webTarget)] {
-			return &AIDecision{
-				Action:    "api_fuzz",
-				Target:    webTarget,
-				Reasoning: fmt.Sprintf("API endpoint fuzzing on port %d", httpPort),
-				RiskLevel: "medium",
-			}, nil
-		}
-	}
-
-	// Phase 4: Nuclei CVE scan all HTTP ports
-	for _, httpPort := range httpPorts {
-		webTarget := fmt.Sprintf("http://%s:%d", target, httpPort)
-		if !completedActions[fmt.Sprintf("nuclei_scan:%s", webTarget)] {
-			return &AIDecision{
-				Action:    "nuclei_scan",
-				Target:    webTarget,
-				Reasoning: fmt.Sprintf("Nuclei CVE scan on port %d", httpPort),
-				RiskLevel: "medium",
-			}, nil
-		}
-	}
-
-	// Phase 4b: Nikto scan all HTTP ports
-	for _, httpPort := range httpPorts {
-		webTarget := fmt.Sprintf("http://%s:%d", target, httpPort)
-		if !completedActions[fmt.Sprintf("nikto_scan:%s", webTarget)] {
-			return &AIDecision{
-				Action:    "nikto_scan",
-				Target:    webTarget,
-				Reasoning: fmt.Sprintf("Nikto web scan on port %d", httpPort),
-				RiskLevel: "medium",
-			}, nil
-		}
-	}
-
-	// Phase 5: XSS scan all HTTP ports
-	for _, httpPort := range httpPorts {
-		webTarget := fmt.Sprintf("http://%s:%d", target, httpPort)
-		if !completedActions[fmt.Sprintf("xss_scan:%s", webTarget)] {
-			return &AIDecision{
-				Action:    "xss_scan",
-				Target:    webTarget,
-				Reasoning: fmt.Sprintf("XSS vulnerability scan on port %d", httpPort),
-				RiskLevel: "medium",
-			}, nil
-		}
-	}
-
-	// Phase 6: SQL injection on all HTTP ports
-	for _, httpPort := range httpPorts {
-		webTarget := fmt.Sprintf("http://%s:%d", target, httpPort)
-		if !completedActions[fmt.Sprintf("sqli_exploit:%s", webTarget)] {
-			return &AIDecision{
-				Action:    "sqli_exploit",
-				Target:    webTarget,
-				Reasoning: fmt.Sprintf("SQL injection scan on port %d", httpPort),
-				RiskLevel: "high",
-			}, nil
-		}
-	}
-
-	// Phase 7: Command injection on all HTTP ports
-	for _, httpPort := range httpPorts {
-		webTarget := fmt.Sprintf("http://%s:%d", target, httpPort)
-		if !completedActions[fmt.Sprintf("cmd_inject:%s", webTarget)] {
-			return &AIDecision{
-				Action:    "cmd_inject",
-				Target:    webTarget,
-				Reasoning: fmt.Sprintf("Command injection scan on port %d", httpPort),
-				RiskLevel: "high",
-			}, nil
-		}
-	}
-
-	// Phase 8: LFI on all HTTP ports
-	for _, httpPort := range httpPorts {
-		webTarget := fmt.Sprintf("http://%s:%d", target, httpPort)
-		if !completedActions[fmt.Sprintf("lfi_exploit:%s", webTarget)] {
-			return &AIDecision{
-				Action:    "lfi_exploit",
-				Target:    webTarget,
-				Reasoning: fmt.Sprintf("Local File Inclusion scan on port %d", httpPort),
-				RiskLevel: "high",
-			}, nil
-		}
-	}
-
-	// Phase 9: SSRF on all HTTP ports
-	for _, httpPort := range httpPorts {
-		webTarget := fmt.Sprintf("http://%s:%d", target, httpPort)
-		if !completedActions[fmt.Sprintf("ssrf_exploit:%s", webTarget)] {
-			return &AIDecision{
-				Action:    "ssrf_exploit",
-				Target:    webTarget,
-				Reasoning: fmt.Sprintf("SSRF vulnerability scan on port %d", httpPort),
-				RiskLevel: "high",
-			}, nil
-		}
-	}
-
-	// Phase 10: File upload on all HTTP ports
-	for _, httpPort := range httpPorts {
-		webTarget := fmt.Sprintf("http://%s:%d", target, httpPort)
-		if !completedActions[fmt.Sprintf("file_upload:%s", webTarget)] {
-			return &AIDecision{
-				Action:    "file_upload",
-				Target:    webTarget,
-				Reasoning: fmt.Sprintf("File upload scan on port %d", httpPort),
-				RiskLevel: "high",
-			}, nil
-		}
-	}
-
-	// Phase 11: SSH brute force on ALL discovered SSH ports
-	for _, sshPort := range sshPorts {
-		sshTarget := fmt.Sprintf("%s:%d", target, sshPort)
-		if !completedActions[fmt.Sprintf("ssh_login:%s", sshTarget)] {
-			return &AIDecision{
-				Action:    "ssh_login",
-				Target:    sshTarget,
-				Reasoning: fmt.Sprintf("SSH brute force on port %d", sshPort),
-				RiskLevel: "high",
-			}, nil
-		}
-	}
-
-	// Phase 6: SSH RECON - after successful SSH login, do post-exploitation
-	for sshTarget, cred := range sshCredentials {
-		reconKey := fmt.Sprintf("ssh_recon:%s", sshTarget)
-		if !completedActions[reconKey] {
-			return &AIDecision{
-				Action:    "ssh_recon",
-				Target:    sshTarget,
-				Reasoning: fmt.Sprintf("Post-exploitation recon as %s to demonstrate impact", cred.Username),
-				RiskLevel: "high",
-				Options: map[string]interface{}{
-					"username": cred.Username,
-					"password": cred.Password,
-				},
-			}, nil
-		}
-	}
-
-	// Phase 6b: Try SQLi credentials on SSH (password reuse attack) - LIMIT TO 3 ATTEMPTS
-	maxReuseAttempts := 3
-	reuseCount := len(sshReuseAttempted)
-	if len(sshPorts) > 0 && reuseCount < maxReuseAttempts {
-		for _, cred := range state.Credentials {
-			if cred.Service == "sqli_dump" && cred.Password != "" {
-				for _, sshPort := range sshPorts {
-					sshTarget := fmt.Sprintf("%s:%d", target, sshPort)
-					reuseKey := fmt.Sprintf("%s:%s", sshTarget, cred.Username)
-
-					if !sshReuseAttempted[reuseKey] && reuseCount < maxReuseAttempts {
-						return &AIDecision{
-							Action:    "ssh_login",
-							Target:    sshTarget,
-							Reasoning: fmt.Sprintf("Password reuse attack - trying %s's database password on SSH", cred.Username),
-							RiskLevel: "high",
-							Options: map[string]interface{}{
-								"username": cred.Username,
-								"password": cred.Password,
-								"reuse":    cred.Username,
-							},
-						}, nil
-					}
-				}
-			}
-		}
-	}
-
-	// Phase 15: Credential spraying - try found creds on all services
-	if len(state.Credentials) > 0 {
-		// Build list of services to spray
-		servicePorts := make(map[string]int)
-		for _, p := range state.OpenPorts {
-			for _, svc := range state.Services {
-				if svc.Port == p.Port {
-					switch svc.Name {
-					case "ftp":
-						servicePorts["ftp"] = p.Port
-					case "mysql":
-						servicePorts["mysql"] = p.Port
-					case "redis":
-						servicePorts["redis"] = p.Port
-					case "http", "http-proxy":
-						servicePorts["http"] = p.Port
-					}
-				}
-			}
-		}
-
-		// Try each credential on each service
-		for _, cred := range state.Credentials {
-			if cred.Password == "" {
-				continue
-			}
-			for svcName, port := range servicePorts {
-				sprayKey := fmt.Sprintf("cred_spray:%s:%s:%d", cred.Username, svcName, port)
-				if !completedActions[sprayKey] {
-					return &AIDecision{
-						Action:    "cred_spray",
-						Target:    fmt.Sprintf("%s:%d", target, port),
-						Reasoning: fmt.Sprintf("Credential spray - trying %s on %s:%d", cred.Username, svcName, port),
-						RiskLevel: "medium",
-						Options: map[string]interface{}{
-							"username": cred.Username,
-							"password": cred.Password,
-							"service":  svcName,
-						},
-					}, nil
-				}
-			}
-		}
-	}
-
-	// If all exploitation done, use AI for additional discovery
 	summary := a.compactState(state)
 
 	// Get RAG exploit recommendations for AI context
 	exploitRecs := a.getExploitRecommendations(state)
 
-	prompt := fmt.Sprintf(`Pentest AI. EXPLOITATION phase complete. Find additional attack vectors.
+	prompt := fmt.Sprintf(`You are an expert penetration tester doing a real engagement. Analyze the target and decide what to investigate next.
 
-STATE:%s
+TARGET STATE:
 %s
-Completed: sqli_exploit, cmd_inject, ssh_login, ssh_recon on main targets.
 
-REMAINING ACTIONS:
-- dir_scan: directory enumeration (target=http://ip:port)
-- service_scan: banner grab (target=ip:port)
-- ftp_anon: check anonymous FTP (target=ip)
-- redis_check: check unauthenticated Redis (target=ip)
-- lfi_exploit: local file inclusion (target=http://ip:port, uri=/page.php?file=)
-- ssrf_exploit: server-side request forgery (target=http://ip:port, uri=/fetch?url=)
-- file_upload: malicious file upload (target=http://ip:port, uri=/upload.php)
-- nuclei_scan: run Nuclei CVE scanner (target=http://ip:port, templates=cves,critical, severity=critical,high)
-- xss_scan: test for XSS vulnerabilities (target=http://ip:port, uri=/search?q=)
-- reverse_shell: generate reverse shell payloads (target=ip, lhost=attacker_ip, lport=port)
-- subdomain_enum: enumerate subdomains (target=domain.com, timeout=60, threads=10)
-- ssl_scan: analyze SSL/TLS config (target=host:port, checks certs, protocols, ciphers)
-- api_fuzz: fuzz REST/GraphQL APIs (target=http://ip:port/api, auth_token=token, cookie=session)
-- crack_hash: crack password hashes (target=hash_value, hash_type=md5|sha1|sha256|ntlm, tool=john|hashcat)
-- complete: all done
+%s
 
-Use EXPLOIT DATABASE RECOMMENDATIONS above to prioritize high-confidence exploits.
+ALREADY COMPLETED (DO NOT REPEAT THESE):
+%s
 
-Reply JSON:
-{"action":"x","target":"ip:port","reasoning":"brief","risk_level":"low|med|high"}`, summary, exploitRecs)
+AVAILABLE ACTIONS:
+
+DATABASE/SERVICE CHECKS - Check these first, often misconfigured!
+- redis_check: Check Redis for no-auth access (target=ip) - port 6379
+- mongodb_check: Check MongoDB for no-auth (target=ip:27017)
+- mysql_check: Check MySQL default creds root/empty (target=ip:3306)
+- postgres_check: Check PostgreSQL default creds (target=ip:5432)
+- ftp_anon: Check FTP anonymous login (target=ip) - port 21
+
+WEB RECONNAISSANCE
+- web_scan: Scan web app for vulnerabilities (target=http://ip:port)
+- dir_scan: Find hidden directories/files (target=http://ip:port)
+- api_fuzz: Discover API endpoints, test auth bypass (target=http://ip:port)
+
+WEB EXPLOITATION - Try these on interesting web services
+- sqli_exploit: SQL injection to extract data (target=http://ip:port)
+- cmd_inject: Command injection for RCE (target=http://ip:port)
+- lfi_exploit: Local file inclusion (target=http://ip:port)
+- xss_scan: Cross-site scripting (target=http://ip:port)
+
+NETWORK SERVICES
+- ssh_login: SSH credential brute force (target=ip:port)
+- service_scan: Grab service banners (target=ip:port)
+
+POST-EXPLOITATION - After finding credentials
+- crack_hash: Crack password hashes (target=hash_value, hash_type=md5)
+- ssh_recon: Run commands on compromised SSH (requires username/password options)
+- cred_spray: Try found creds on other services (target=ip:port, service=mysql, username=x, password=y)
+
+- complete: Finished - use when you've thoroughly tested everything
+
+STRATEGY:
+1. FIRST check databases/services for no-auth (Redis, MongoDB) - these are quick wins
+2. Look at each open port and think "what could be vulnerable here?"
+3. If you find credentials, try to crack them and reuse them
+4. Don't just scan - EXPLOIT what you find
+5. Be thorough - a real pentest checks everything
+
+Reply JSON only (pick ONE action):
+{"action":"x","target":"ip:port","reasoning":"why this matters","risk_level":"low|med|high"}`, summary, exploitRecs, strings.Join(completedList, ", "))
 
 	messages := []Message{
 		{Role: "user", Content: prompt},
@@ -734,7 +474,8 @@ Reply JSON:
 		"lfi_exploit": true, "ssrf_exploit": true, "file_upload": true,
 		"nuclei_scan": true, "xss_scan": true, "nikto_scan": true,
 		"subdomain_enum": true, "ssl_scan": true, "api_fuzz": true,
-		"crack_hash": true,
+		"crack_hash": true, "mysql_check": true, "mongodb_check": true,
+		"postgres_check": true,
 	}
 	if !validActions[decision.Action] {
 		decision.Action = "complete"

@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -246,6 +247,12 @@ func (r *AutoRunner) executeAction(ctx context.Context, decision *AIDecision) (*
 		return r.actionAPIFuzz(ctx, action, decision)
 	case "crack_hash":
 		return r.actionCrackHash(ctx, action, decision)
+	case "mysql_check":
+		return r.actionMySQLCheck(ctx, action, decision)
+	case "mongodb_check":
+		return r.actionMongoDBCheck(ctx, action, decision)
+	case "postgres_check":
+		return r.actionPostgresCheck(ctx, action, decision)
 	default:
 		action.Result = fmt.Sprintf("Unknown action: %s", decision.Action)
 		action.Success = false
@@ -2224,4 +2231,162 @@ func detectHashType(hash string) string {
 		}
 		return "md5" // Default fallback
 	}
+}
+
+func (r *AutoRunner) actionMySQLCheck(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	target := decision.Target
+	host := target
+	port := "3306"
+
+	if strings.Contains(target, ":") {
+		parts := strings.Split(target, ":")
+		host = parts[0]
+		port = parts[1]
+	}
+
+	// Try common default credentials
+	creds := []struct{ user, pass string }{
+		{"root", ""},
+		{"root", "root"},
+		{"root", "mysql"},
+		{"root", "password"},
+		{"mysql", "mysql"},
+		{"admin", "admin"},
+	}
+
+	for _, c := range creds {
+		cmd := exec.CommandContext(ctx, "mysql", "-h", host, "-P", port, "-u", c.user, fmt.Sprintf("-p%s", c.pass), "-e", "SELECT 1", "--connect-timeout=3")
+		output, err := cmd.CombinedOutput()
+
+		if err == nil || strings.Contains(string(output), "1") {
+			// Success!
+			cf := CredentialFind{
+				Username: c.user,
+				Password: c.pass,
+				Service:  "mysql",
+				Target:   target,
+			}
+			r.state.Credentials = append(r.state.Credentials, cf)
+
+			if r.callbacks.OnCredential != nil {
+				r.callbacks.OnCredential(cf)
+			}
+
+			r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+				Type:        "weak_credentials",
+				Severity:    "critical",
+				Target:      target,
+				Description: fmt.Sprintf("MySQL accessible with %s:%s", c.user, c.pass),
+				Timestamp:   time.Now(),
+			})
+
+			action.Result = fmt.Sprintf("MySQL login successful: %s:%s", c.user, c.pass)
+			action.Success = true
+			return action, nil
+		}
+	}
+
+	action.Result = "MySQL default credentials not found"
+	action.Success = false
+	return action, nil
+}
+
+func (r *AutoRunner) actionMongoDBCheck(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	target := decision.Target
+	host := target
+	port := "27017"
+
+	if strings.Contains(target, ":") {
+		parts := strings.Split(target, ":")
+		host = parts[0]
+		port = parts[1]
+	}
+
+	// Try connecting without auth
+	cmd := exec.CommandContext(ctx, "mongosh", "--host", host, "--port", port, "--eval", "db.adminCommand('listDatabases')", "--quiet")
+	output, err := cmd.CombinedOutput()
+
+	if err == nil && (strings.Contains(string(output), "databases") || strings.Contains(string(output), "name")) {
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "unauthenticated_access",
+			Severity:    "critical",
+			Target:      target,
+			Description: "MongoDB accessible without authentication",
+			Evidence:    string(output),
+			Timestamp:   time.Now(),
+		})
+
+		if r.callbacks.OnFinding != nil {
+			r.callbacks.OnFinding(Finding{
+				Type:        "unauthenticated_access",
+				Severity:    "critical",
+				Target:      target,
+				Description: "MongoDB accessible without authentication",
+			})
+		}
+
+		action.Result = "MongoDB accessible without authentication"
+		action.Success = true
+		return action, nil
+	}
+
+	action.Result = "MongoDB requires authentication"
+	action.Success = false
+	return action, nil
+}
+
+func (r *AutoRunner) actionPostgresCheck(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	target := decision.Target
+	host := target
+	port := "5432"
+
+	if strings.Contains(target, ":") {
+		parts := strings.Split(target, ":")
+		host = parts[0]
+		port = parts[1]
+	}
+
+	// Try common default credentials
+	creds := []struct{ user, pass string }{
+		{"postgres", "postgres"},
+		{"postgres", ""},
+		{"postgres", "password"},
+		{"admin", "admin"},
+	}
+
+	for _, c := range creds {
+		connStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=postgres connect_timeout=3 sslmode=disable", host, port, c.user, c.pass)
+		cmd := exec.CommandContext(ctx, "psql", connStr, "-c", "SELECT 1")
+		output, err := cmd.CombinedOutput()
+
+		if err == nil || strings.Contains(string(output), "1") {
+			cf := CredentialFind{
+				Username: c.user,
+				Password: c.pass,
+				Service:  "postgresql",
+				Target:   target,
+			}
+			r.state.Credentials = append(r.state.Credentials, cf)
+
+			if r.callbacks.OnCredential != nil {
+				r.callbacks.OnCredential(cf)
+			}
+
+			r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+				Type:        "weak_credentials",
+				Severity:    "critical",
+				Target:      target,
+				Description: fmt.Sprintf("PostgreSQL accessible with %s:%s", c.user, c.pass),
+				Timestamp:   time.Now(),
+			})
+
+			action.Result = fmt.Sprintf("PostgreSQL login successful: %s:%s", c.user, c.pass)
+			action.Success = true
+			return action, nil
+		}
+	}
+
+	action.Result = "PostgreSQL default credentials not found"
+	action.Success = false
+	return action, nil
 }
