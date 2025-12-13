@@ -132,6 +132,16 @@ func (s *Scanner) FastFullScan(ctx context.Context, target string) (*Host, error
 	for _, p := range sshPorts {
 		if !portSet[p] {
 			ports = append(ports, p)
+			portSet[p] = true
+		}
+	}
+
+	// Add critical database ports that are often misconfigured
+	dbPorts := []int{6379, 27017, 9200, 5601, 11211, 2379}
+	for _, p := range dbPorts {
+		if !portSet[p] {
+			ports = append(ports, p)
+			portSet[p] = true
 		}
 	}
 

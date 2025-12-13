@@ -360,6 +360,35 @@ func (a *AutoPentester) GetNextAction(ctx context.Context, state *PentestState) 
 		}, nil
 	}
 
+	// Phase 1b: Check critical services for default/no credentials FIRST
+	// Redis - often unauthenticated
+	for _, p := range state.OpenPorts {
+		if p.Port == 6379 {
+			if !completedActions[fmt.Sprintf("redis_check:%s", target)] {
+				return &AIDecision{
+					Action:    "redis_check",
+					Target:    target,
+					Reasoning: "Check Redis for unauthenticated access - critical finding",
+					RiskLevel: "low",
+				}, nil
+			}
+		}
+	}
+
+	// FTP anonymous login
+	for _, p := range state.OpenPorts {
+		if p.Port == 21 {
+			if !completedActions[fmt.Sprintf("ftp_anon:%s", target)] {
+				return &AIDecision{
+					Action:    "ftp_anon",
+					Target:    target,
+					Reasoning: "Check FTP for anonymous login",
+					RiskLevel: "low",
+				}, nil
+			}
+		}
+	}
+
 	// Phase 2: Web scan all HTTP ports first (discover vulns before exploiting)
 	for _, httpPort := range httpPorts {
 		webTarget := fmt.Sprintf("http://%s:%d", target, httpPort)
