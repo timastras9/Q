@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"pentestai/cmd/console"
+	"pentestai/cmd/server"
 )
 
 var version = "1.0.0"
@@ -16,6 +17,8 @@ func main() {
 	var (
 		showVersion = flag.Bool("version", false, "Show version")
 		showHelp    = flag.Bool("help", false, "Show help")
+		serverMode  = flag.Bool("server", false, "Run as HTTP API server")
+		serverPort  = flag.String("port", "8081", "Port for HTTP server")
 	)
 
 	flag.Parse()
@@ -32,13 +35,20 @@ func main() {
 
 	// Load .env file if present
 	loadEnvFile(".env")
+	loadEnvFile("/opt/.env") // Also check /opt/.env on server
 
 	// Check for required tools/permissions
 	checkRequirements()
 
-	// Start interactive console
-	c := console.NewConsole()
-	c.Run()
+	if *serverMode {
+		// Start HTTP API server
+		s := server.NewServer(*serverPort)
+		s.Run()
+	} else {
+		// Start interactive console
+		c := console.NewConsole()
+		c.Run()
+	}
 }
 
 func printHelp() {
@@ -51,15 +61,25 @@ Usage:
 Options:
   --help       Show this help message
   --version    Show version information
+  --server     Run as HTTP API server
+  --port       Port for HTTP server (default: 8081)
 
 Environment Variables:
   ANTHROPIC_API_KEY    API key for Claude AI integration
 
 Examples:
   pentestai                     Start interactive console
-  ANTHROPIC_API_KEY=sk-... pentestai
+  pentestai --server            Start HTTP API server on port 8081
+  pentestai --server --port 9000  Start API on port 9000
 
-Once in the console, type 'help' for available commands.
+API Endpoints (server mode):
+  POST /api/scan       - Start a scan (async)
+  GET  /api/scan/{id}  - Get scan status/results
+  POST /api/recon      - Quick port scan
+  POST /api/web-scan   - Web vulnerability scan
+  POST /api/exploit    - Run exploit module
+  POST /api/ai-analyze - AI analysis of results
+  GET  /api/health     - Health check
 
 IMPORTANT: Only use this tool on systems you have authorization to test.
 `

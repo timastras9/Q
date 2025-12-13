@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Legacy Apache Server</title>
+    <style>
+        body { font-family: 'Courier New', monospace; background: #1a1a2e; color: #eee; padding: 40px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        h1 { color: #e94560; }
+        a { color: #0f3460; background: #e94560; padding: 5px 15px; text-decoration: none; display: inline-block; margin: 5px; }
+        a:hover { background: #ff6b6b; }
+        .info { background: #16213e; padding: 20px; margin: 20px 0; border-left: 4px solid #e94560; }
+        pre { background: #0f0f23; padding: 15px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>Legacy Apache Server v2.4</h1>
+    <p>Internal corporate server - Authorized access only</p>
+
+    <div class="info">
+        <h3>Quick Links</h3>
+        <a href="/admin/">Admin Panel</a>
+        <a href="/backup/">Backups</a>
+        <a href="/cgi-bin/">CGI Scripts</a>
+        <a href="/server-status">Server Status</a>
+        <a href="/server-info">Server Info</a>
+    </div>
+
+    <div class="info">
+        <h3>Server Information</h3>
+        <pre>
+Apache/2.4 (Unix)
+Document Root: /usr/local/apache2/htdocs
+Server Admin: admin@localhost
+        </pre>
+    </div>
+
+    <!--
+    TODO: Clean up before deployment
+    - Remove /backup directory
+    - Disable server-status
+    - Update admin credentials (currently admin:admin123)
+    - Remove CGI test scripts
+    -->
+
+    <div class="info">
+        <h3>Maintenance Notes</h3>
+        <p>Last updated: 2023-01-15</p>
+        <p>Contact: legacy-admin@internal.corp</p>
+        <!-- Database credentials in /config/db.conf -->
+    </div>
+</div>
+</body>
+</html>

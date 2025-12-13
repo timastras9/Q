@@ -1,0 +1,343 @@
+version: "3.8"
+
+# Modern Enterprise Vulnerable Lab
+# Simulates realistic corporate security posture circa 2024
+# Contains: Cloud-native apps, CI/CD, legacy systems, misconfigurations
+
+services:
+  # ============================================
+  # TIER 1: EXTERNAL FACING (DMZ)
+  # ============================================
+
+  # Modern Node.js API with JWT vulnerabilities
+  vulnerable-api:
+    build:
+      context: ./services/vulnerable-api
+      dockerfile: Dockerfile
+    container_name: lab-api
+    ports:
+      - "3000:3000"
+    environment:
+      - JWT_SECRET=super-secret-key-123
+      - DEBUG=true
+      - NODE_ENV=development
+    restart: unless-stopped
+
+  # WordPress with outdated plugins (common in enterprises)
+  wordpress:
+    image: wordpress:5.9-php7.4-apache
+    container_name: lab-wordpress
+    ports:
+      - "8080:80"
+    environment:
+      - WORDPRESS_DB_HOST=mysql
+      - WORDPRESS_DB_USER=wordpress
+      - WORDPRESS_DB_PASSWORD=wordpress123
+      - WORDPRESS_DB_NAME=wordpress
+    depends_on:
+      - mysql
+    restart: unless-stopped
+
+  # Nginx reverse proxy with misconfigurations
+  nginx-proxy:
+    build:
+      context: ./services/nginx-proxy
+      dockerfile: Dockerfile
+    container_name: lab-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    restart: unless-stopped
+
+  # ============================================
+  # TIER 2: INTERNAL SERVICES
+  # ============================================
+
+  # Jenkins CI/CD (often exposed, misconfigured)
+  jenkins:
+    image: jenkins/jenkins:lts
+    container_name: lab-jenkins
+    ports:
+      - "8081:8080"
+      - "50000:50000"
+    environment:
+      - JAVA_OPTS=-Djenkins.install.runSetupWizard=false
+    volumes:
+      - jenkins_home:/var/jenkins_home
+    restart: unless-stopped
+
+  # GitLab (exposed git repos, CI tokens)
+  gitlab:
+    image: gitlab/gitlab-ce:latest
+    container_name: lab-gitlab
+    ports:
+      - "8929:80"
+      - "8922:22"
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://localhost:8929'
+        gitlab_rails['initial_root_password'] = 'password123'
+    volumes:
+      - gitlab_config:/etc/gitlab
+      - gitlab_logs:/var/log/gitlab
+      - gitlab_data:/var/opt/gitlab
+    restart: unless-stopped
+
+  # Grafana dashboard (default creds, data exposure)
+  grafana:
+    image: grafana/grafana:9.0.0
+    container_name: lab-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+    restart: unless-stopped
+
+  # Elasticsearch (often exposed without auth)
+  elasticsearch:
+    image: elasticsearch:7.17.0
+    container_name: lab-elasticsearch
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+    restart: unless-stopped
+
+  # Kibana (exposed dashboards)
+  kibana:
+    image: kibana:7.17.0
+    container_name: lab-kibana
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    depends_on:
+      - elasticsearch
+    restart: unless-stopped
+
+  # ============================================
+  # TIER 3: DATABASE LAYER
+  # ============================================
+
+  # MySQL (weak password, exposed)
+  mysql:
+    image: mysql:8.0
+    container_name: lab-mysql
+    ports:
+      - "3306:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=root123
+      - MYSQL_DATABASE=wordpress
+      - MYSQL_USER=wordpress
+      - MYSQL_PASSWORD=wordpress123
+    volumes:
+      - mysql_data:/var/lib/mysql
+    restart: unless-stopped
+
+  # MongoDB (no auth - common misconfiguration)
+  mongodb:
+    image: mongo:5.0
+    container_name: lab-mongodb
+    ports:
+      - "27017:27017"
+    # No authentication - vulnerable!
+    restart: unless-stopped
+
+  # Redis (no auth, accessible)
+  redis:
+    image: redis:7-alpine
+    container_name: lab-redis
+    ports:
+      - "6379:6379"
+    # No password - vulnerable!
+    restart: unless-stopped
+
+  # PostgreSQL (weak creds)
+  postgres:
+    image: postgres:14
+    container_name: lab-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=admin123
+      - POSTGRES_DB=enterprise
+    restart: unless-stopped
+
+  # ============================================
+  # TIER 4: LEGACY SYSTEMS
+  # ============================================
+
+  # Apache with mod_status exposed (info leak)
+  apache-legacy:
+    build:
+      context: ./services/apache-legacy
+      dockerfile: Dockerfile
+    container_name: lab-apache-legacy
+    ports:
+      - "8082:80"
+    restart: unless-stopped
+
+  # PHP application with SQLi, XSS, LFI
+  php-legacy:
+    build:
+      context: ./services/php-legacy
+      dockerfile: Dockerfile
+    container_name: lab-php-legacy
+    ports:
+      - "8083:80"
+    restart: unless-stopped
+
+  # Tomcat with manager exposed
+  tomcat:
+    image: tomcat:9.0
+    container_name: lab-tomcat
+    ports:
+      - "8084:8080"
+    environment:
+      - CATALINA_OPTS=-Xmx512m
+    restart: unless-stopped
+
+  # ============================================
+  # TIER 5: INFRASTRUCTURE
+  # ============================================
+
+  # SSH with weak credentials
+  ssh-server:
+    image: linuxserver/openssh-server
+    container_name: lab-ssh
+    ports:
+      - "2222:2222"
+    environment:
+      - USER_NAME=admin
+      - USER_PASSWORD=admin123
+      - PASSWORD_ACCESS=true
+    restart: unless-stopped
+
+  # FTP with anonymous access
+  ftp-server:
+    image: fauria/vsftpd
+    container_name: lab-ftp
+    ports:
+      - "21:21"
+      - "21100-21110:21100-21110"
+    environment:
+      - FTP_USER=ftpuser
+      - FTP_PASS=ftppass123
+      - PASV_ADDRESS=127.0.0.1
+      - PASV_MIN_PORT=21100
+      - PASV_MAX_PORT=21110
+    restart: unless-stopped
+
+  # MinIO (S3-compatible, misconfigured)
+  minio:
+    image: minio/minio
+    container_name: lab-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    command: server /data --console-address ":9001"
+    restart: unless-stopped
+
+  # Docker Registry (exposed without auth)
+  registry:
+    image: registry:2
+    container_name: lab-registry
+    ports:
+      - "5000:5000"
+    restart: unless-stopped
+
+  # ============================================
+  # TIER 6: SECURITY TRAINING - WIRELESS & CRACKING
+  # ============================================
+
+  # Wireless Network Simulation with WPA2 cracking targets
+  wireless-sim:
+    build:
+      context: ./services/wireless-sim
+      dockerfile: Dockerfile
+    container_name: lab-wireless-sim
+    privileged: true
+    ports:
+      - "8085:80"
+      - "1812:1812/udp"
+      - "1813:1813/udp"
+    volumes:
+      - wireless_captures:/captures
+      - ./services/wireless-sim/wordlists:/wordlists:ro
+      - ./services/wireless-sim/sample-hashes:/hashes:ro
+    restart: unless-stopped
+
+  # Kali attack box for practicing (optional)
+  kali-attacker:
+    image: kalilinux/kali-rolling
+    container_name: lab-kali
+    privileged: true
+    tty: true
+    stdin_open: true
+    command: /bin/bash -c "apt-get update && apt-get install -y nmap hydra john hashcat aircrack-ng metasploit-framework && tail -f /dev/null"
+    volumes:
+      - kali_data:/root
+      - wireless_captures:/captures
+    restart: unless-stopped
+
+  # LDAP Server (Active Directory simulation)
+  ldap:
+    image: osixia/openldap:1.5.0
+    container_name: lab-ldap
+    ports:
+      - "389:389"
+      - "636:636"
+    environment:
+      - LDAP_ORGANISATION=Enterprise Corp
+      - LDAP_DOMAIN=enterprise.local
+      - LDAP_ADMIN_PASSWORD=admin123
+    restart: unless-stopped
+
+  # Samba/SMB share (Windows-like file shares)
+  samba:
+    image: dperson/samba
+    container_name: lab-samba
+    ports:
+      - "139:139"
+      - "445:445"
+    environment:
+      - USER=admin;admin123
+      - USER2=guest;guest
+      - SHARE=public;/share;yes;no;no;all
+      - SHARE2=confidential;/confidential;no;no;no;admin
+    volumes:
+      - samba_public:/share
+      - samba_confidential:/confidential
+    restart: unless-stopped
+
+  # SNMP server (network device simulation)
+  snmp:
+    image: polinux/snmpd
+    container_name: lab-snmp
+    ports:
+      - "161:161/udp"
+    environment:
+      - SNMP_COMMUNITY=public
+    restart: unless-stopped
+
+volumes:
+  wireless_captures:
+  kali_data:
+  samba_public:
+  samba_confidential:
+  jenkins_home:
+  gitlab_config:
+  gitlab_logs:
+  gitlab_data:
+  mysql_data:
+
+networks:
+  default:
+    name: enterprise-lab

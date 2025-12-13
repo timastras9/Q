@@ -1,0 +1,15 @@
+{
+  "name": "vulnerable-api",
+  "version": "1.0.0",
+  "description": "Intentionally vulnerable API for pentesting practice",
+  "main": "server.js",
+  "dependencies": {
+    "express": "^4.18.2",
+    "jsonwebtoken": "^8.5.1",
+    "mongodb": "^5.0.0",
+    "cors": "^2.8.5",
+    "body-parser": "^1.20.2",
+    "xml2js": "^0.4.23",
+    "ejs": "^3.1.6"
+  }
+}

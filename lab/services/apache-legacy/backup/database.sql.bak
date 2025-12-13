@@ -1,0 +1,48 @@
+-- Database Backup - 2023-01-10
+-- CONFIDENTIAL - Internal use only
+
+-- MySQL dump 5.7
+-- Host: mysql    Database: legacy_app
+
+CREATE DATABASE IF NOT EXISTS legacy_app;
+USE legacy_app;
+
+-- Users table
+CREATE TABLE users (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(50),
+    password VARCHAR(255),
+    email VARCHAR(100),
+    role VARCHAR(20),
+    api_key VARCHAR(64)
+);
+
+-- VULNERABILITY: Plaintext passwords in backup
+INSERT INTO users VALUES
+(1, 'admin', 'SuperAdmin2024!', 'admin@company.com', 'admin', 'sk-admin-key-abc123xyz'),
+(2, 'developer', 'DevPass123', 'dev@company.com', 'developer', 'sk-dev-key-def456uvw'),
+(3, 'backup_user', 'BackupPass!99', 'backup@company.com', 'service', 'sk-backup-key-ghi789rst');
+
+-- API Keys table
+CREATE TABLE api_keys (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    service_name VARCHAR(100),
+    api_key VARCHAR(255),
+    secret VARCHAR(255)
+);
+
+INSERT INTO api_keys VALUES
+(1, 'stripe', 'pk_live_abc123', 'sk_live_xyz789'),
+(2, 'aws', 'AKIAIOSFODNN7EXAMPLE', 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'),
+(3, 'sendgrid', 'SG.xxx', 'sg-api-secret-key');
+
+-- Config table
+CREATE TABLE config (
+    key_name VARCHAR(50) PRIMARY KEY,
+    value TEXT
+);
+
+INSERT INTO config VALUES
+('jwt_secret', 'super-secret-jwt-key-change-me'),
+('encryption_key', 'aes-256-key-for-encryption'),
+('admin_email', 'admin@internal.company.local');

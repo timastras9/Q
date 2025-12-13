@@ -20,3 +20,8 @@ Thumbs.db
 # Test output
 *.log
 reports/
+*.json
+pentestai-linux
+pentestai
+*.pdf
+reports/

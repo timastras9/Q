@@ -1,0 +1,77 @@
+# Sample Password Hashes for Cracking Practice
+# These represent common hash types found during pentests
+
+# === MD5 Hashes (hashcat mode 0) ===
+# admin:admin123
+21232f297a57a5a743894a0e4a801fc3:admin
+# password:password
+5f4dcc3b5aa765d61d8327deb882cf99:password
+# root:root123
+d41d8cd98f00b204e9800998ecf8427e:root
+# guest:guest
+084e0343a0486ff05530df6c705c8bb4:guest
+# user:letmein
+0d107d09f5bbe40cade3de5c71e9e9b7:letmein
+
+# === SHA1 Hashes (hashcat mode 100) ===
+# admin:admin123
+f865b53623b121fd34ee5426c792e5c33af8c227:admin
+# password:password
+5baa61e4c9b93f3f0682250b6cf8331b7ee68fd8:password
+
+# === SHA256 Hashes (hashcat mode 1400) ===
+# admin:admin123
+240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9:admin
+# password:password
+5e884898da28047d9166e8e0e1f8a8f4f0d6e9f9f8f8f8f8f8f8f8f8f8f8f8f8:password
+
+# === bcrypt Hashes (hashcat mode 3200) ===
+# admin:admin123
+$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZRGdjGj/n3Ii5YGnKDJEoJBgD/Vei:admin
+# password:password
+$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/X4beH4.0E7q1VqIPS:password
+
+# === NTLM Hashes (hashcat mode 1000) ===
+# Administrator:Password1
+a4f49c406510bdcab6824ee7c30fd852:Administrator
+# admin:admin
+209c6174da490caeb422f3fa5a7ae634:admin
+# guest:guest
+e99a18c428cb38d5f260853678922e03:guest
+
+# === MySQL 5.x (hashcat mode 300) ===
+# root:root123
+*E8D46CE25265E545D225A8A6F1BAF642FEBEE5CB:root
+
+# === PostgreSQL MD5 (hashcat mode 12) ===
+# postgres:postgres
+md532e12f215ba27cb750c9e093ce4b5127:postgres
+
+# === Cisco Type 5 (hashcat mode 500) ===
+# admin:cisco123
+$1$mERr$hL96tqI/2Q4K0h3N9XKhk/:admin
+
+# === WPA2 PSK (hashcat mode 2500/22000) ===
+# See /captures/ directory for handshake files
+# SSID: CorpWiFi-Guest, Password: company123
+# SSID: TestNetwork, Password: password123
+
+# === Kerberos TGS-REP (hashcat mode 13100) ===
+# Simulated kerberoast hash - Password: Summer2024!
+$krb5tgs$23$*user$DOMAIN.LOCAL$spn*$a]cefabcdef0123456789:Summer2024!
+
+# === AS-REP Roast (hashcat mode 18200) ===
+# Simulated AS-REP hash - Password: Welcome123
+$krb5asrep$23$user@DOMAIN.LOCAL:Welcome123
+
+# === SSH Private Key (john mode ssh) ===
+# See /hashes/ssh_keys/ for encrypted private keys
+# Passphrase: sshkey123
+
+# === ZIP Password (hashcat mode 17200) ===
+# Password: zippass
+$zip2$*0*3*0*b5d2b7bf57ad5e86a55c400509c672bd*d218*0*ZFILE*$/zip2$:zippass
+
+# === Office 2013 (hashcat mode 9600) ===
+# Password: document1
+$office$*2013*100000*256*16*ff2563844fdf02c0d***:document1

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "pentestai": {
+      "command": "/Users/tim/pen_test_ai/mcp/pentestai-mcp",
+      "args": [],
+      "env": {}
+    }
+  }
+}

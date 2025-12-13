@@ -1,0 +1,33 @@
+# Old configuration backup
+# Created: 2022-06-15
+
+[database]
+host = mysql
+port = 3306
+username = root
+password = root123
+database = production_db
+
+[redis]
+host = redis
+port = 6379
+password = redis_secret_pass
+
+[api]
+secret_key = legacy-api-secret-2022
+jwt_secret = jwt-signing-key-do-not-share
+admin_token = admin-bearer-token-xyz
+
+[smtp]
+host = smtp.company.com
+username = noreply@company.com
+password = smtp_password_123
+
+[aws]
+access_key = AKIAEXAMPLEKEY123456
+secret_key = ExAmPlEsEcReTkEy/WithSomeNumbers123
+
+[internal]
+debug_mode = true
+admin_bypass_auth = true
+log_passwords = true

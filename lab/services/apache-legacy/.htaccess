@@ -1,0 +1,18 @@
+# VULNERABILITY: .htaccess is readable and contains sensitive info
+
+# Credentials for internal use (TODO: remove before production)
+# Admin: admin / apache_admin_2024
+# API Key: APACHE-LEGACY-KEY-xyz789
+
+# VULNERABILITY: Weak authentication
+AuthType Basic
+AuthName "Restricted Area"
+# AuthUserFile /usr/local/apache2/conf/.htpasswd
+
+# VULNERABILITY: RewriteRule can expose internal paths
+RewriteEngine On
+RewriteRule ^internal/(.*)$ /admin/$1 [L]
+
+# VULNERABILITY: Environment variables exposed
+SetEnv DB_PASSWORD legacy_db_pass
+SetEnv API_SECRET apache_api_secret_key

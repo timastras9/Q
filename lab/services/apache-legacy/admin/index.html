@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Admin Panel</title>
+    <style>
+        body { font-family: Arial; background: #2d2d2d; color: #fff; padding: 20px; }
+        .panel { background: #3d3d3d; padding: 20px; margin: 10px 0; border-radius: 5px; }
+        input { padding: 10px; margin: 5px; width: 200px; }
+        button { padding: 10px 20px; background: #e94560; border: none; color: white; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h1>Admin Control Panel</h1>
+
+    <div class="panel">
+        <h3>Server Management</h3>
+        <p>Current Status: <span style="color: #4caf50;">ONLINE</span></p>
+        <p>Uptime: 47 days, 3 hours</p>
+        <p>Load: 0.23</p>
+    </div>
+
+    <div class="panel">
+        <h3>Quick Actions</h3>
+        <button onclick="alert('Restarting...')">Restart Apache</button>
+        <button onclick="alert('Clearing...')">Clear Cache</button>
+        <button onclick="alert('Backing up...')">Backup Now</button>
+    </div>
+
+    <div class="panel">
+        <h3>Login (for advanced features)</h3>
+        <form method="POST" action="/cgi-bin/login.cgi">
+            <input type="text" name="username" placeholder="Username"><br>
+            <input type="password" name="password" placeholder="Password"><br>
+            <button type="submit">Login</button>
+        </form>
+        <!-- Default: admin / admin123 -->
+    </div>
+
+    <!--
+    DEBUG INFO - REMOVE IN PRODUCTION
+    Database: mysql://root:root123@mysql:3306/admin_db
+    Redis: redis://redis:6379
+    Internal API: http://internal-api:8080/admin
+    -->
+</body>
+</html>

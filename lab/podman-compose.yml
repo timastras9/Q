@@ -1,0 +1,287 @@
+version: "3.8"
+
+# Isolated Pentest Lab for Podman
+# Network: 10.10.10.0/24
+# Target all services at their static IPs or the gateway 10.10.10.1
+
+services:
+  # ============================================
+  # ATTACKER BOX - Run pentestai from here
+  # ============================================
+  attacker:
+    image: golang:1.21-alpine
+    container_name: pentest-attacker
+    hostname: attacker
+    networks:
+      pentest-lab:
+        ipv4_address: 10.10.10.100
+    volumes:
+      - ../:/app:ro
+      - attacker_home:/root
+    working_dir: /app
+    command: sh -c "apk add --no-cache nmap curl git && cp /app/pentestai /root/pentestai && chmod +x /root/pentestai && tail -f /dev/null"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    tty: true
+    stdin_open: true
+
+  # ============================================
+  # TIER 1: WEB SERVICES
+  # ============================================
+
+  # Vulnerable Node.js API
+  vulnerable-api:
+    build:
+      context: ./services/vulnerable-api
+      dockerfile: Dockerfile
+    container_name: lab-api
+    hostname: api
+    networks:
+      pentest-lab:
+        ipv4_address: 10.10.10.10
+    environment:
+      - JWT_SECRET=super-secret-key-123
+      - DEBUG=true
+      - NODE_ENV=development
+
+  # PHP Legacy app with SQLi, XSS, LFI
+  php-legacy:
+    build:
+      context: ./services/php-legacy
+      dockerfile: Dockerfile
+    container_name: lab-php
+    hostname: php
+    networks:
+      pentest-lab:
+        ipv4_address: 10.10.10.11
+
+  # Nginx reverse proxy with misconfigs
+  nginx-proxy:
+    build:
+      context: ./services/nginx-proxy
+      dockerfile: Dockerfile
+    container_name: lab-nginx
+    hostname: nginx
+    networks:
+      pentest-lab:
+        ipv4_address: 10.10.10.12
+
+  # Apache with mod_status exposed
+  apache-legacy:
+    build:
+      context: ./services/apache-legacy
+      dockerfile: Dockerfile
+    container_name: lab-apache
+    hostname: apache
+    networks:
+      pentest-lab:
+        ipv4_address: 10.10.10.13
+
+  # ============================================
+  # TIER 2: DATABASES (No Auth / Weak Auth)
+  # ============================================
+
+  # MySQL with weak password
+  mysql:
+    image: mysql:8.0
+    container_name: lab-mysql
+    hostname: mysql
+    networks:
+      pentest-lab:
+        ipv4_address: 10.10.10.20
+    environment:
+      - MYSQL_ROOT_PASSWORD=root123
+      - MYSQL_DATABASE=webapp
+      - MYSQL_USER=admin
+      - MYSQL_PASSWORD=admin123
+
+  # MongoDB NO AUTH
+  mongodb:
+    image: mongo:5.0
+    container_name: lab-mongodb
+    hostname: mongodb
+    networks:
+      pentest-lab:
+        ipv4_address: 10.10.10.21
+
+  # Redis NO AUTH
+  redis:
+    image: redis:7-alpine
+    container_name: lab-redis
+    hostname: redis
+    networks:
+      pentest-lab:
+        ipv4_address: 10.10.10.22
+
+  # PostgreSQL weak creds
+  postgres:
+    image: postgres:14
+    container_name: lab-postgres
+    hostname: postgres
+    networks:
+      pentest-lab:
+        ipv4_address: 10.10.10.23
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=admin123
+      - POSTGRES_DB=enterprise
+
+  # Elasticsearch NO AUTH
+  elasticsearch:
+    image: elasticsearch:7.17.0
+    container_name: lab-elasticsearch
+    hostname: elasticsearch
+    networks:
+      pentest-lab:
+        ipv4_address: 10.10.10.24
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms256m -Xmx256m"
+
+  # ============================================
+  # TIER 3: NETWORK SERVICES
+  # ============================================
+
+  # SSH with weak credentials
+  ssh-server:
+    image: linuxserver/openssh-server
+    container_name: lab-ssh
+    hostname: sshserver
+    networks:
+      pentest-lab:
+        ipv4_address: 10.10.10.30
+    environment:
+      - USER_NAME=admin
+      - USER_PASSWORD=admin123
+      - PASSWORD_ACCESS=true
+      - PUID=1000
+      - PGID=1000
+
+  # FTP with weak credentials
+  ftp-server:
+    image: fauria/vsftpd
+    container_name: lab-ftp
+    hostname: ftpserver
+    networks:
+      pentest-lab:
+        ipv4_address: 10.10.10.31
+    environment:
+      - FTP_USER=ftpuser
+      - FTP_PASS=ftppass123
+      - PASV_ADDRESS=10.10.10.31
+      - PASV_MIN_PORT=21100
+      - PASV_MAX_PORT=21110
+
+  # LDAP Server
+  ldap:
+    image: osixia/openldap:1.5.0
+    container_name: lab-ldap
+    hostname: ldap
+    networks:
+      pentest-lab:
+        ipv4_address: 10.10.10.32
+    environment:
+      - LDAP_ORGANISATION=Enterprise Corp
+      - LDAP_DOMAIN=enterprise.local
+      - LDAP_ADMIN_PASSWORD=admin123
+
+  # SMB/Samba share
+  samba:
+    image: dperson/samba
+    container_name: lab-samba
+    hostname: samba
+    networks:
+      pentest-lab:
+        ipv4_address: 10.10.10.33
+    environment:
+      - USER=admin;admin123
+      - USER2=guest;guest
+      - SHARE=public;/share;yes;no;no;all
+      - SHARE2=confidential;/confidential;no;no;no;admin
+    volumes:
+      - samba_public:/share
+      - samba_confidential:/confidential
+
+  # SNMP server
+  snmp:
+    image: polinux/snmpd
+    container_name: lab-snmp
+    hostname: snmp
+    networks:
+      pentest-lab:
+        ipv4_address: 10.10.10.34
+    environment:
+      - SNMP_COMMUNITY=public
+
+  # ============================================
+  # TIER 4: CI/CD & MONITORING
+  # ============================================
+
+  # Grafana with default creds
+  grafana:
+    image: grafana/grafana:9.0.0
+    container_name: lab-grafana
+    hostname: grafana
+    networks:
+      pentest-lab:
+        ipv4_address: 10.10.10.40
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+
+  # MinIO S3-compatible storage
+  minio:
+    image: minio/minio
+    container_name: lab-minio
+    hostname: minio
+    networks:
+      pentest-lab:
+        ipv4_address: 10.10.10.41
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    command: server /data --console-address ":9001"
+
+  # Docker Registry without auth
+  registry:
+    image: registry:2
+    container_name: lab-registry
+    hostname: registry
+    networks:
+      pentest-lab:
+        ipv4_address: 10.10.10.42
+
+  # ============================================
+  # METASPLOIT FRAMEWORK
+  # ============================================
+  metasploit:
+    image: metasploitframework/metasploit-framework:latest
+    container_name: lab-metasploit
+    hostname: metasploit
+    networks:
+      pentest-lab:
+        ipv4_address: 10.10.10.99
+    environment:
+      - MSF_RPC_USER=msf
+      - MSF_RPC_PASS=msf123
+    command: >
+      sh -c "
+        ./msfconsole -q -x '
+          load msgrpc ServerHost=0.0.0.0 ServerPort=55553 User=msf Pass=msf123;
+        '
+      "
+    volumes:
+      - msf_data:/root/.msf4
+    tty: true
+    stdin_open: true
+
+networks:
+  pentest-lab:
+    external: true
+
+volumes:
+  attacker_home:
+  samba_public:
+  samba_confidential:
+  msf_data:
