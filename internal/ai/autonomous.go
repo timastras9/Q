@@ -582,6 +582,50 @@ Reply with JSON only:
 		}
 	}
 
+	// Prevent repeating failed actions - track failures per action+target
+	failedCounts := make(map[string]int)
+	for _, a := range state.ActionHistory {
+		if !a.Success {
+			// Normalize target (strip port variations)
+			baseTarget := strings.Split(a.Target, ":")[0]
+			key := a.Type + ":" + baseTarget
+			failedCounts[key]++
+		}
+	}
+
+	// Check if this action has failed too many times (max 2 attempts)
+	decisionBaseTarget := strings.Split(decision.Target, ":")[0]
+	decisionKey := decision.Action + ":" + decisionBaseTarget
+	if failedCounts[decisionKey] >= 2 {
+		// This action has failed twice on this target, pick something else
+		// Find an untested service
+		for _, p := range state.OpenPorts {
+			portStr := fmt.Sprintf("%d", p.Port)
+			testKey := fmt.Sprintf("%s:%s:%s", decision.Action, state.Target, portStr)
+			if !completedActions[testKey] && failedCounts[decision.Action+":"+state.Target] < 2 {
+				// Try a different port
+				decision.Target = state.Target + ":" + portStr
+				decision.Reasoning = fmt.Sprintf("Skipping repeated failures, trying port %s", portStr)
+				break
+			}
+		}
+		// If still the same failed action, force web_scan or complete
+		if failedCounts[decisionKey] >= 2 {
+			// Try web_scan on an HTTP port if available
+			for _, p := range state.OpenPorts {
+				if p.Port == 80 || p.Port == 8080 || p.Port == 3000 || p.Port == 443 {
+					webKey := fmt.Sprintf("web_scan:%s:%d", state.Target, p.Port)
+					if !completedActions[webKey] {
+						decision.Action = "web_scan"
+						decision.Target = fmt.Sprintf("http://%s:%d", state.Target, p.Port)
+						decision.Reasoning = "Skipping failed action, trying web scan"
+						break
+					}
+				}
+			}
+		}
+	}
+
 	return &decision, nil
 }
 

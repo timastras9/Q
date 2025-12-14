@@ -279,7 +279,7 @@ func (s *MCPServer) getTools() []Tool {
 
 func (s *MCPServer) scanPorts(args map[string]interface{}) (string, error) {
 	target := args["target"].(string)
-	portsArg := "21,22,23,25,53,80,110,111,135,139,143,443,445,993,995,1433,1521,3306,3389,5432,5900,6379,8080,8443,9200,27017,5000,5601,9000,9001,8081,8082,8083,8084,8085"
+	portsArg := "21,22,23,25,53,80,110,111,135,139,143,443,445,993,995,1099,1433,1521,2049,2222,3000,3306,3389,5000,5432,5601,5900,6379,8080,8081,8082,8083,8084,8085,8086,8087,8088,8443,9000,9001,9200,27017,50051"
 	if p, ok := args["ports"].(string); ok && p != "" {
 		portsArg = p
 	}
@@ -1077,14 +1077,17 @@ func expandPorts(portsArg string) []int {
 func identifyService(port int) string {
 	services := map[int]string{
 		21: "ftp", 22: "ssh", 23: "telnet", 25: "smtp", 53: "dns",
-		80: "http", 110: "pop3", 111: "rpc", 135: "msrpc", 139: "netbios",
+		80: "http", 110: "pop3", 111: "rpcbind", 135: "msrpc", 139: "netbios",
 		143: "imap", 443: "https", 445: "smb", 993: "imaps", 995: "pop3s",
-		1433: "mssql", 1521: "oracle", 3306: "mysql", 3389: "rdp",
-		5432: "postgresql", 5900: "vnc", 6379: "redis", 8080: "http-proxy",
-		8443: "https-alt", 9200: "elasticsearch", 27017: "mongodb",
-		5000: "docker-registry", 5601: "kibana", 9000: "minio", 9001: "minio-console",
+		1099: "java-rmi", 1433: "mssql", 1521: "oracle", 2049: "nfs",
+		2222: "ssh", 3000: "http-node", 3306: "mysql", 3389: "rdp",
+		5000: "docker-registry", 5432: "postgresql", 5601: "kibana",
+		5900: "vnc", 6379: "redis", 8080: "http-proxy",
 		8081: "http-alt", 8082: "http-alt", 8083: "http-alt", 8084: "http-alt",
-		8085: "http-alt", 389: "ldap", 636: "ldaps",
+		8085: "http-alt", 8086: "xmlrpc", 8087: "jsonrpc", 8088: "http-alt",
+		8443: "https-alt", 9000: "minio", 9001: "minio-console",
+		9200: "elasticsearch", 27017: "mongodb", 50051: "grpc",
+		389: "ldap", 636: "ldaps",
 	}
 	if s, ok := services[port]; ok {
 		return s
