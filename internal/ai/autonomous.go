@@ -582,51 +582,130 @@ Reply with JSON only:
 		}
 	}
 
-	// Prevent repeating failed actions - track failures per action+target
+	// Track both failed and successful actions per action+target
 	failedCounts := make(map[string]int)
+	successCounts := make(map[string]int)
 	for _, a := range state.ActionHistory {
-		if !a.Success {
-			// Normalize target (strip port variations)
-			baseTarget := strings.Split(a.Target, ":")[0]
-			key := a.Type + ":" + baseTarget
+		// Normalize target - extract IP from URLs or plain host:port
+		baseTarget := normalizeTarget(a.Target)
+		key := a.Type + ":" + baseTarget
+		if a.Success {
+			successCounts[key]++
+		} else {
 			failedCounts[key]++
 		}
 	}
 
 	// Check if this action has failed too many times (max 2 attempts)
-	decisionBaseTarget := strings.Split(decision.Target, ":")[0]
+	decisionBaseTarget := normalizeTarget(decision.Target)
 	decisionKey := decision.Action + ":" + decisionBaseTarget
-	if failedCounts[decisionKey] >= 2 {
-		// This action has failed twice on this target, pick something else
-		// Find an untested service
-		for _, p := range state.OpenPorts {
-			portStr := fmt.Sprintf("%d", p.Port)
-			testKey := fmt.Sprintf("%s:%s:%s", decision.Action, state.Target, portStr)
-			if !completedActions[testKey] && failedCounts[decision.Action+":"+state.Target] < 2 {
-				// Try a different port
-				decision.Target = state.Target + ":" + portStr
-				decision.Reasoning = fmt.Sprintf("Skipping repeated failures, trying port %s", portStr)
-				break
-			}
-		}
-		// If still the same failed action, force web_scan or complete
-		if failedCounts[decisionKey] >= 2 {
-			// Try web_scan on an HTTP port if available
-			for _, p := range state.OpenPorts {
-				if p.Port == 80 || p.Port == 8080 || p.Port == 3000 || p.Port == 443 {
-					webKey := fmt.Sprintf("web_scan:%s:%d", state.Target, p.Port)
-					if !completedActions[webKey] {
-						decision.Action = "web_scan"
-						decision.Target = fmt.Sprintf("http://%s:%d", state.Target, p.Port)
-						decision.Reasoning = "Skipping failed action, trying web scan"
-						break
-					}
-				}
-			}
-		}
+
+	// Also check if this action has already succeeded (no need to repeat)
+	if successCounts[decisionKey] >= 1 && decision.Action != "complete" {
+		// This action already succeeded, find something else to do
+		decision = a.findAlternativeAction(state, &decision, completedActions, failedCounts, successCounts)
+	} else if failedCounts[decisionKey] >= 2 {
+		// This action has failed twice, find something else
+		decision = a.findAlternativeAction(state, &decision, completedActions, failedCounts, successCounts)
 	}
 
 	return &decision, nil
+}
+
+// normalizeTarget extracts the base IP/hostname from a target string
+// Handles: "http://127.0.0.1:8080", "127.0.0.1:8080", "127.0.0.1"
+func normalizeTarget(target string) string {
+	// Strip protocol prefix
+	t := target
+	if strings.HasPrefix(t, "http://") {
+		t = strings.TrimPrefix(t, "http://")
+	} else if strings.HasPrefix(t, "https://") {
+		t = strings.TrimPrefix(t, "https://")
+	}
+	// Strip port suffix
+	if idx := strings.LastIndex(t, ":"); idx > 0 {
+		t = t[:idx]
+	}
+	// Strip path
+	if idx := strings.Index(t, "/"); idx > 0 {
+		t = t[:idx]
+	}
+	return t
+}
+
+// findAlternativeAction finds an untested action when the current one should be skipped
+func (a *AutoPentester) findAlternativeAction(state *PentestState, current *AIDecision, completedActions map[string]bool, failedCounts, successCounts map[string]int) AIDecision {
+	decision := *current
+
+	// List of alternative actions to try in priority order
+	alternativeActions := []struct {
+		action     string
+		ports      []int
+		urlPrefix  string
+		reasoning  string
+	}{
+		{"cmd_inject", []int{8080, 80, 3000, 8443}, "http://", "Trying command injection on web service"},
+		{"sqli", []int{8080, 80, 3000}, "http://", "Trying SQL injection on web service"},
+		{"dir_bruteforce", []int{8080, 80, 3000}, "http://", "Bruteforcing directories on web service"},
+		{"ssh_login", []int{22, 2222, 22022}, "", "Trying SSH credential check"},
+		{"banner_grab", []int{21, 22, 25, 110, 143}, "", "Grabbing service banners for version info"},
+	}
+
+	// Try each alternative action
+	for _, alt := range alternativeActions {
+		altBaseKey := alt.action + ":" + state.Target
+		// Skip if already tried (success or 2+ failures)
+		if successCounts[altBaseKey] >= 1 || failedCounts[altBaseKey] >= 2 {
+			continue
+		}
+
+		// Check if any of the ports are open
+		for _, port := range alt.ports {
+			portOpen := false
+			for _, p := range state.OpenPorts {
+				if p.Port == port {
+					portOpen = true
+					break
+				}
+			}
+			if !portOpen {
+				continue
+			}
+
+			// Check if this specific port was already tested
+			testKey := fmt.Sprintf("%s:%s:%d", alt.action, state.Target, port)
+			if completedActions[testKey] {
+				continue
+			}
+
+			// Found an untested action!
+			decision.Action = alt.action
+			if alt.urlPrefix != "" {
+				decision.Target = fmt.Sprintf("%s%s:%d", alt.urlPrefix, state.Target, port)
+			} else {
+				decision.Target = fmt.Sprintf("%s:%d", state.Target, port)
+			}
+			decision.Reasoning = alt.reasoning
+			return decision
+		}
+	}
+
+	// If no alternatives found, try any untested port with banner_grab
+	for _, p := range state.OpenPorts {
+		testKey := fmt.Sprintf("banner_grab:%s:%d", state.Target, p.Port)
+		if !completedActions[testKey] {
+			decision.Action = "banner_grab"
+			decision.Target = fmt.Sprintf("%s:%d", state.Target, p.Port)
+			decision.Reasoning = fmt.Sprintf("Grabbing banner from port %d for more info", p.Port)
+			return decision
+		}
+	}
+
+	// Still nothing? Complete the scan
+	decision.Action = "complete"
+	decision.Target = state.Target
+	decision.Reasoning = "All available actions exhausted"
+	return decision
 }
 
 // AnalyzeResults asks AI to analyze scan/exploit results
