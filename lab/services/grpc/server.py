@@ -1,25 +1,16 @@
 #!/usr/bin/env python3
-"""SECURED gRPC-like server - patched by PentestAI autofix.
-No longer executes arbitrary commands."""
+"""Vulnerable gRPC-like server for penetration testing training.
+This is a simplified TCP server that accepts commands directly - mimics a badly configured gRPC service."""
 
 import socket
-import os
-
-# SECURITY: Allowlist of safe commands
-ALLOWED_COMMANDS = {
-    'status': 'Service status: OK',
-    'health': 'Health: HEALTHY',
-    'version': 'Version: 1.0.0-secured',
-    'help': 'Available commands: status, health, version, help',
-}
+import subprocess
 
 def main():
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     s.bind(("0.0.0.0", 50051))
     s.listen(5)
-    print("[SECURED] gRPC-like server on port 50051")
-    print("[SECURED] Command execution DISABLED - only safe commands allowed")
+    print("Vulnerable gRPC-like server on port 50051")
 
     while True:
         conn, addr = s.accept()
@@ -27,15 +18,16 @@ def main():
         try:
             data = conn.recv(4096)
             if data:
-                cmd = data.decode().strip().lower()
-
-                # SECURITY: Only allow pre-defined safe commands
-                if cmd in ALLOWED_COMMANDS:
-                    response = ALLOWED_COMMANDS[cmd]
-                else:
-                    response = f"Error: Command '{cmd}' not allowed. Type 'help' for available commands."
-
-                conn.send(response.encode() + b'\n')
+                # VULNERABILITY: Direct command execution!
+                cmd = data.decode().strip()
+                if cmd:
+                    try:
+                        result = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT)
+                        conn.send(result)
+                    except subprocess.CalledProcessError as e:
+                        conn.send(f"Error: {e.output}".encode())
+                    except Exception as e:
+                        conn.send(f"Error: {str(e)}".encode())
         except Exception as e:
             print(f"Connection error: {e}")
         finally:

