@@ -2,9 +2,18 @@ package server
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"log"
+	"math/big"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -21,6 +30,9 @@ import (
 
 type Server struct {
 	port       string
+	tlsEnabled bool
+	certFile   string
+	keyFile    string
 	scanner    *recon.Scanner
 	webScanner *webapp.WebScanner
 	framework  *exploit.Framework
@@ -57,10 +69,19 @@ type ScanResponse struct {
 func NewServer(port string) *Server {
 	s := &Server{
 		port:       port,
+		tlsEnabled: os.Getenv("TLS_ENABLED") == "true" || os.Getenv("TLS_ENABLED") == "1",
+		certFile:   os.Getenv("TLS_CERT"),
+		keyFile:    os.Getenv("TLS_KEY"),
 		scanner:    recon.NewScanner(),
 		webScanner: webapp.NewWebScanner(),
 		framework:  exploit.NewFramework(),
 		scans:      make(map[string]*ScanJob),
+	}
+
+	// Default cert paths if TLS enabled but paths not specified
+	if s.tlsEnabled && s.certFile == "" {
+		s.certFile = "/opt/data/certs/server.crt"
+		s.keyFile = "/opt/data/certs/server.key"
 	}
 
 	// Initialize AI client if API key is available
@@ -97,7 +118,12 @@ func (s *Server) Run() {
 	mux.HandleFunc("/api/ai-analyze", s.corsMiddleware(s.handleAIAnalyze))
 	mux.HandleFunc("/api/health", s.corsMiddleware(s.handleHealth))
 
-	log.Printf("[*] PentestAI API server starting on port %s", s.port)
+	protocol := "http"
+	if s.tlsEnabled {
+		protocol = "https"
+	}
+
+	log.Printf("[*] PentestAI API server starting on %s://0.0.0.0:%s", protocol, s.port)
 	log.Printf("[*] Endpoints:")
 	log.Printf("    POST /api/scan        - Start a scan")
 	log.Printf("    GET  /api/scan/{id}   - Get scan status/results")
@@ -109,9 +135,128 @@ func (s *Server) Run() {
 	log.Printf("    POST /api/ai-analyze  - AI analysis")
 	log.Printf("    GET  /api/health      - Health check")
 
-	if err := http.ListenAndServe(":"+s.port, mux); err != nil {
-		log.Fatalf("Server failed: %v", err)
+	if s.tlsEnabled {
+		// Ensure certificates exist
+		if err := s.ensureCertificates(); err != nil {
+			log.Fatalf("Failed to setup TLS certificates: %v", err)
+		}
+
+		// Configure TLS
+		tlsConfig := &tls.Config{
+			MinVersion:               tls.VersionTLS12,
+			PreferServerCipherSuites: true,
+			CipherSuites: []uint16{
+				tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+			},
+		}
+
+		server := &http.Server{
+			Addr:      ":" + s.port,
+			Handler:   mux,
+			TLSConfig: tlsConfig,
+		}
+
+		log.Printf("[*] TLS enabled with cert: %s", s.certFile)
+		if err := server.ListenAndServeTLS(s.certFile, s.keyFile); err != nil {
+			log.Fatalf("TLS Server failed: %v", err)
+		}
+	} else {
+		if err := http.ListenAndServe(":"+s.port, mux); err != nil {
+			log.Fatalf("Server failed: %v", err)
+		}
 	}
+}
+
+// ensureCertificates checks if TLS certs exist, generates self-signed if not
+func (s *Server) ensureCertificates() error {
+	// Check if certificates already exist
+	if _, err := os.Stat(s.certFile); err == nil {
+		if _, err := os.Stat(s.keyFile); err == nil {
+			log.Printf("[*] Using existing certificates")
+			return nil
+		}
+	}
+
+	log.Printf("[*] Generating self-signed TLS certificate...")
+
+	// Create directory if needed
+	certDir := strings.TrimSuffix(s.certFile, "/server.crt")
+	if certDir != s.certFile {
+		if err := os.MkdirAll(certDir, 0755); err != nil {
+			return fmt.Errorf("failed to create cert directory: %v", err)
+		}
+	}
+
+	// Generate ECDSA private key
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return fmt.Errorf("failed to generate private key: %v", err)
+	}
+
+	// Create certificate template
+	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return fmt.Errorf("failed to generate serial number: %v", err)
+	}
+
+	template := x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			Organization: []string{"PentestAI"},
+			CommonName:   "PentestAI API Server",
+		},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour), // Valid for 1 year
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		DNSNames:              []string{"localhost", "pentestai", "api.pentestai.local"},
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("0.0.0.0")},
+	}
+
+	// Create the certificate
+	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &privateKey.PublicKey, privateKey)
+	if err != nil {
+		return fmt.Errorf("failed to create certificate: %v", err)
+	}
+
+	// Write certificate to file
+	certOut, err := os.Create(s.certFile)
+	if err != nil {
+		return fmt.Errorf("failed to create cert file: %v", err)
+	}
+	if err := pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes}); err != nil {
+		certOut.Close()
+		return fmt.Errorf("failed to write cert: %v", err)
+	}
+	certOut.Close()
+
+	// Write private key to file
+	keyOut, err := os.OpenFile(s.keyFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return fmt.Errorf("failed to create key file: %v", err)
+	}
+
+	keyBytes, err := x509.MarshalECPrivateKey(privateKey)
+	if err != nil {
+		keyOut.Close()
+		return fmt.Errorf("failed to marshal private key: %v", err)
+	}
+
+	if err := pem.Encode(keyOut, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyBytes}); err != nil {
+		keyOut.Close()
+		return fmt.Errorf("failed to write key: %v", err)
+	}
+	keyOut.Close()
+
+	log.Printf("[*] Generated self-signed certificate: %s", s.certFile)
+	log.Printf("[*] Generated private key: %s", s.keyFile)
+	log.Printf("[!] WARNING: Self-signed certificate - clients should use -k or --insecure flag")
+
+	return nil
 }
 
 func (s *Server) corsMiddleware(next http.HandlerFunc) http.HandlerFunc {

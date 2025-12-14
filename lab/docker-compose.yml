@@ -327,6 +327,223 @@ services:
       - SNMP_COMMUNITY=public
     restart: unless-stopped
 
+  # ============================================
+  # TIER 7: RPC SERVICES (Remote Procedure Call)
+  # ============================================
+
+  # NFS Server (Network File System - RPC-based)
+  nfs-server:
+    image: itsthenetwork/nfs-server-alpine:latest
+    container_name: lab-nfs
+    privileged: true
+    ports:
+      - "2049:2049"
+      - "111:111"
+      - "111:111/udp"
+    environment:
+      - SHARED_DIRECTORY=/nfsshare
+      - SYNC=true
+      - PERMITTED="*"
+    volumes:
+      - nfs_data:/nfsshare
+    restart: unless-stopped
+
+  # Portmapper/rpcbind (RPC service discovery)
+  rpcbind:
+    image: alpine:3.18
+    container_name: lab-rpcbind
+    ports:
+      - "112:111"
+      - "112:111/udp"
+    command: >
+      sh -c "apk add --no-cache rpcbind &&
+             rpcbind -f -w"
+    privileged: true
+    restart: unless-stopped
+
+  # NIS/YP Server (Yellow Pages - legacy RPC auth)
+  nis-server:
+    image: alpine:3.18
+    container_name: lab-nis
+    ports:
+      - "713:713"
+      - "714:714/udp"
+    command: >
+      sh -c "apk add --no-cache ypserv ypbind rpcbind &&
+             echo 'admin:$$6$$rounds=5000$$saltsalt$$hashhash:1000:1000:Admin:/home/admin:/bin/bash' > /etc/passwd.yp &&
+             echo 'enterprise.local' > /etc/defaultdomain &&
+             rpcbind && ypserv -d"
+    privileged: true
+    restart: unless-stopped
+
+  # XML-RPC Service (vulnerable to various attacks)
+  xmlrpc:
+    build:
+      context: ./services/xmlrpc
+      dockerfile: Dockerfile
+    container_name: lab-xmlrpc
+    ports:
+      - "8086:8086"
+    restart: unless-stopped
+
+  # JSON-RPC Service (Ethereum/Web3 style)
+  jsonrpc:
+    build:
+      context: ./services/jsonrpc
+      dockerfile: Dockerfile
+    container_name: lab-jsonrpc
+    ports:
+      - "8087:8087"
+    restart: unless-stopped
+
+  # gRPC Service (modern RPC with vulnerabilities)
+  grpc-server:
+    build:
+      context: ./services/grpc
+      dockerfile: Dockerfile
+    container_name: lab-grpc
+    ports:
+      - "50051:50051"
+    restart: unless-stopped
+
+  # D-Bus over TCP (unusual but exploitable)
+  dbus-tcp:
+    image: alpine:3.18
+    container_name: lab-dbus
+    ports:
+      - "55556:55556"
+    command: >
+      sh -c "apk add --no-cache dbus socat &&
+             socat TCP-LISTEN:55556,fork,reuseaddr UNIX-CONNECT:/var/run/dbus/system_bus_socket &
+             dbus-daemon --system --nofork"
+    privileged: true
+    restart: unless-stopped
+
+  # Java RMI Registry (classic RPC attack surface)
+  java-rmi:
+    image: openjdk:11-jdk-slim
+    container_name: lab-rmi
+    ports:
+      - "1099:1099"
+      - "9999:9999"
+    command: >
+      sh -c "cat > /tmp/VulnServer.java << 'JAVA'
+      import java.rmi.*;
+      import java.rmi.registry.*;
+      import java.rmi.server.*;
+
+      interface VulnService extends Remote {
+          String execute(String cmd) throws RemoteException;
+          String readFile(String path) throws RemoteException;
+          String getSystemInfo() throws RemoteException;
+      }
+
+      class VulnServiceImpl extends UnicastRemoteObject implements VulnService {
+          VulnServiceImpl() throws RemoteException { super(); }
+
+          public String execute(String cmd) throws RemoteException {
+              try {
+                  Process p = Runtime.getRuntime().exec(cmd);
+                  java.io.BufferedReader r = new java.io.BufferedReader(
+                      new java.io.InputStreamReader(p.getInputStream()));
+                  StringBuilder sb = new StringBuilder();
+                  String line;
+                  while ((line = r.readLine()) != null) sb.append(line).append(\"\\n\");
+                  return sb.toString();
+              } catch (Exception e) { return e.toString(); }
+          }
+
+          public String readFile(String path) throws RemoteException {
+              try {
+                  return new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(path)));
+              } catch (Exception e) { return e.toString(); }
+          }
+
+          public String getSystemInfo() throws RemoteException {
+              return \"Java RMI Server v1.0\\nOS: \" + System.getProperty(\"os.name\") +
+                     \"\\nUser: \" + System.getProperty(\"user.name\") +
+                     \"\\nSecret API Key: sk-12345-admin-secret\";
+          }
+      }
+
+      public class VulnServer {
+          public static void main(String[] args) throws Exception {
+              System.setProperty(\"java.rmi.server.hostname\", \"0.0.0.0\");
+              LocateRegistry.createRegistry(1099);
+              VulnService service = new VulnServiceImpl();
+              Naming.rebind(\"rmi://0.0.0.0:1099/VulnService\", service);
+              System.out.println(\"RMI Server running on port 1099\");
+              Thread.sleep(Long.MAX_VALUE);
+          }
+      }
+      JAVA
+      cd /tmp && javac VulnServer.java && java -Djava.rmi.server.hostname=0.0.0.0 VulnServer"
+    restart: unless-stopped
+
+  # Microsoft RPC simulation (DCE/RPC style)
+  msrpc-sim:
+    image: python:3.9-slim
+    container_name: lab-msrpc
+    ports:
+      - "135:135"
+      - "593:593"
+    command: >
+      sh -c "pip install impacket && python3 -c '
+      import socket
+      import struct
+      import os
+
+      # Simple DCE/RPC endpoint mapper simulation
+      s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+      s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+      s.bind((\"0.0.0.0\", 135))
+      s.listen(5)
+      print(\"MS-RPC Endpoint Mapper simulation on port 135\")
+
+      # Fake RPC endpoints
+      endpoints = [
+          {\"uuid\": \"e1af8308-5d1f-11c9-91a4-08002b14a0fa\", \"name\": \"EPM\", \"version\": \"3.0\"},
+          {\"uuid\": \"12345778-1234-abcd-ef00-0123456789ab\", \"name\": \"LSARPC\", \"version\": \"0.0\"},
+          {\"uuid\": \"12345678-1234-abcd-ef00-0123456789ac\", \"name\": \"SAMR\", \"version\": \"1.0\"},
+          {\"uuid\": \"367abb81-9844-35f1-ad32-98f038001003\", \"name\": \"SVCCTL\", \"version\": \"2.0\"},
+          {\"uuid\": \"338cd001-2244-31f1-aaaa-900038001003\", \"name\": \"WINREG\", \"version\": \"1.0\"},
+          {\"uuid\": \"4b324fc8-1670-01d3-1278-5a47bf6ee188\", \"name\": \"SRVSVC\", \"version\": \"3.0\"},
+      ]
+
+      while True:
+          try:
+              conn, addr = s.accept()
+              data = conn.recv(4096)
+              # Return fake endpoint list
+              response = \"\\n\".join([f\"{e[chr(39)]uuid[chr(39)]}: {e[chr(39)]name[chr(39)]} v{e[chr(39)]version[chr(39)]}\" for e in endpoints])
+              conn.send(response.encode())
+              conn.close()
+          except:
+              pass
+      '"
+    restart: unless-stopped
+
+  # Sun RPC (ONC RPC) - Classic Unix RPC
+  sunrpc:
+    image: alpine:3.18
+    container_name: lab-sunrpc
+    ports:
+      - "113:111"
+      - "113:111/udp"
+      - "32765-32770:32765-32770"
+    command: >
+      sh -c "apk add --no-cache rpcbind nfs-utils &&
+             echo '/share *(rw,sync,no_subtree_check,no_root_squash,insecure)' > /etc/exports &&
+             mkdir -p /share && echo 'SECRET_DATA=admin_password_123' > /share/secret.txt &&
+             rpcbind -w && rpc.nfsd && rpc.mountd &&
+             exportfs -ra &&
+             rpcinfo -p localhost &&
+             tail -f /dev/null"
+    privileged: true
+    volumes:
+      - sunrpc_share:/share
+    restart: unless-stopped
+
 volumes:
   wireless_captures:
   kali_data:
@@ -337,6 +554,8 @@ volumes:
   gitlab_logs:
   gitlab_data:
   mysql_data:
+  nfs_data:
+  sunrpc_share:
 
 networks:
   default:

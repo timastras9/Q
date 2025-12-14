@@ -66,11 +66,20 @@ Options:
 
 Environment Variables:
   ANTHROPIC_API_KEY    API key for Claude AI integration
+  TLS_ENABLED          Set to "true" to enable HTTPS (auto-generates self-signed cert)
+  TLS_CERT             Path to TLS certificate file (default: /opt/data/certs/server.crt)
+  TLS_KEY              Path to TLS private key file (default: /opt/data/certs/server.key)
 
 Examples:
   pentestai                     Start interactive console
   pentestai --server            Start HTTP API server on port 8081
   pentestai --server --port 9000  Start API on port 9000
+
+  # Enable HTTPS with auto-generated self-signed certificate:
+  TLS_ENABLED=true pentestai --server --port 443
+
+  # Use custom certificates:
+  TLS_ENABLED=true TLS_CERT=/path/cert.pem TLS_KEY=/path/key.pem pentestai --server
 
 API Endpoints (server mode):
   POST /api/scan       - Start a scan (async)

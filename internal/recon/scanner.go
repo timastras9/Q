@@ -80,9 +80,10 @@ func (s *Scanner) SetConcurrency(c int) {
 // DefaultPorts returns common ports to scan including web apps
 func DefaultPorts() []int {
 	return []int{
-		21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 143, 443, 445, 993, 995,
-		1433, 1521, 1723, 2222, 3306, 3389, 5432, 5900, 5985, 6379, 8000, 8080,
-		8081, 8082, 8443, 8888, 9090, 22022, 27017,
+		21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 143, 389, 443, 445, 993, 995,
+		1433, 1521, 1723, 2222, 3000, 3306, 3389, 5000, 5432, 5601, 5900, 5985,
+		6379, 8000, 8080, 8081, 8082, 8083, 8084, 8085, 8443, 8888, 8922, 8929,
+		9090, 9200, 11211, 22022, 27017,
 	}
 }
 
@@ -139,6 +140,24 @@ func (s *Scanner) FastFullScan(ctx context.Context, target string) (*Host, error
 	// Add critical database ports that are often misconfigured
 	dbPorts := []int{6379, 27017, 9200, 5601, 11211, 2379}
 	for _, p := range dbPorts {
+		if !portSet[p] {
+			ports = append(ports, p)
+			portSet[p] = true
+		}
+	}
+
+	// Add common HTTP ports for lab/dev environments
+	httpPorts := []int{3000, 5000, 8082, 8083, 8084, 8085, 8888, 8922, 8929, 9000, 9001}
+	for _, p := range httpPorts {
+		if !portSet[p] {
+			ports = append(ports, p)
+			portSet[p] = true
+		}
+	}
+
+	// Add RPC service ports (XML-RPC, JSON-RPC, gRPC, Java RMI, NFS, etc.)
+	rpcPorts := []int{8086, 8087, 50051, 1099, 9999, 111, 2049, 135, 593}
+	for _, p := range rpcPorts {
 		if !portSet[p] {
 			ports = append(ports, p)
 			portSet[p] = true
@@ -554,9 +573,14 @@ func identifyService(port int) Service {
 		5985:  {Name: "winrm"},
 		6379:  {Name: "redis"},
 		8080:  {Name: "http-proxy"},
-		8081:  {Name: "http-dvwa", Product: "DVWA"},  // DVWA vulnerable app
-		8082:  {Name: "http-bwapp", Product: "bWAPP"}, // bWAPP vulnerable app
+		8081:  {Name: "http-jenkins", Product: "Jenkins"}, // Jenkins CI
+		8082:  {Name: "http-apache", Product: "Apache"},   // Apache legacy
+		8083:  {Name: "http-vuln", Product: "Legacy PHP"}, // Vulnerable PHP app
+		8084:  {Name: "http-tomcat", Product: "Tomcat"},   // Tomcat
+		8085:  {Name: "http-wireless", Product: "Wireless Sim"},
 		8443:  {Name: "https-alt"},
+		8922:  {Name: "ssh-gitlab"},
+		8929:  {Name: "http-gitlab", Product: "GitLab"},
 		22022: {Name: "ssh"}, // Common alternate SSH port
 		27017: {Name: "mongodb"},
 	}

@@ -367,41 +367,191 @@ function generateReport(scanData, outputPath) {
         y += 35;
     });
     
-    // ============ CREDENTIALS ============
+    // ============ CREDENTIALS - FEAR FACTOR SECTION ============
     if (stats.credentials > 0) {
         doc.addPage();
-        doc.rect(50, 40, contentWidth, 3).fill(colors.accent);
-        doc.fontSize(18).fillColor(colors.primary);
-        safeText('EXTRACTED CREDENTIALS', 50, 55);
-        
-        doc.roundedRect(50, 85, contentWidth, 40, 3).fillAndStroke('#fef2f2', colors.critical);
-        doc.fontSize(10).fillColor(colors.critical);
-        safeText('WARNING: These accounts are compromised. Reset passwords immediately.', 60, 100);
-        
+
+        // Red danger header
+        doc.rect(0, 0, pageWidth, 120).fill(colors.critical);
+        doc.fontSize(12).fillColor('#ffffff');
+        safeText('⚠ SECURITY BREACH ⚠', 50, 30);
+        doc.fontSize(28).fillColor('#ffffff');
+        safeText('COMPROMISED CREDENTIALS', 50, 50);
+        doc.fontSize(11).fillColor('#ffcccc');
+        safeText('The following credentials were extracted during this penetration test.', 50, 90);
+        safeText('An attacker with this access can fully compromise your systems.', 50, 105);
+
         y = 140;
-        doc.roundedRect(50, y, contentWidth, 25, 2).fill(colors.primary);
-        doc.fontSize(9).fillColor('#ffffff');
-        safeText('USERNAME', 60, y + 8);
-        safeText('TYPE', 200, y + 8);
-        safeText('SOURCE', 300, y + 8);
-        
-        y += 30;
+
+        // Scary warning box
+        doc.roundedRect(50, y, contentWidth, 60, 5).fillAndStroke('#2d0a0a', colors.critical);
+        doc.fontSize(14).fillColor(colors.critical);
+        safeText('IMMEDIATE ACTION REQUIRED', 60, y + 12);
+        doc.fontSize(9).fillColor('#ff6666');
+        safeText('• All passwords shown below must be changed IMMEDIATELY', 60, y + 30);
+        safeText('• Any SSH keys displayed are now considered PUBLIC - regenerate them', 60, y + 42);
+        safeText('• Audit all systems these credentials may have accessed', 60, y + 54);
+
+        y += 75;
+
         const creds = scanData.credentials || [];
-        creds.forEach((cred, i) => {
-            if (y > pageHeight - 50) {
+
+        // Separate SSH keys from regular credentials
+        const sshKeys = creds.filter(c => c.service === 'ssh_key_extracted' || (c.password && c.password.includes('BEGIN')));
+        const regularCreds = creds.filter(c => c.service !== 'ssh_key_extracted' && !(c.password && c.password.includes('BEGIN')));
+        const hashCreds = creds.filter(c => c.source === 'sqli_dump' || c.source === 'shadow_hash' || (c.hash && c.hash.length > 0));
+
+        // Regular credentials section
+        if (regularCreds.length > 0) {
+            doc.roundedRect(50, y, contentWidth, 25, 2).fill('#1a1a1a');
+            doc.fontSize(10).fillColor(colors.critical);
+            safeText('PLAINTEXT PASSWORDS EXTRACTED', 60, y + 8);
+            y += 30;
+
+            doc.roundedRect(50, y, contentWidth, 22, 2).fill(colors.primary);
+            doc.fontSize(8).fillColor('#ffffff');
+            safeText('USERNAME', 60, y + 7);
+            safeText('PASSWORD', 180, y + 7);
+            safeText('SOURCE', 380, y + 7);
+            y += 25;
+
+            regularCreds.forEach((cred, i) => {
+                if (y > pageHeight - 50) {
+                    doc.addPage();
+                    y = 50;
+                }
+
+                doc.roundedRect(50, y, contentWidth, 26, 0).fill(i % 2 === 0 ? '#fff5f5' : '#ffe5e5');
+                doc.rect(50, y, 4, 26).fill(colors.critical);
+
+                doc.fontSize(10).fillColor('#1a1a1a').font('Helvetica-Bold');
+                safeText(cred.username || 'N/A', 62, y + 8);
+
+                doc.font('Courier').fillColor(colors.critical);
+                // Show full password - this is the fear factor
+                const pass = cred.password || cred.hash || 'N/A';
+                safeText(pass.substring(0, 35), 180, y + 8);
+
+                doc.font('Helvetica').fontSize(8).fillColor(colors.lightText);
+                safeText(cred.source || cred.service || '', 380, y + 8);
+
+                y += 28;
+            });
+
+            y += 15;
+        }
+
+        // Password hashes section
+        const pureHashes = hashCreds.filter(c => !regularCreds.includes(c));
+        if (pureHashes.length > 0) {
+            if (y > pageHeight - 100) {
                 doc.addPage();
                 y = 50;
             }
-            
-            doc.roundedRect(50, y, contentWidth, 22, 0).fill(i % 2 === 0 ? '#ffffff' : colors.background);
-            doc.fontSize(9).fillColor(colors.primary);
-            safeText((cred.username || 'N/A').substring(0, 20), 60, y + 6);
-            doc.fillColor(colors.lightText);
-            safeText(cred.type || 'password', 200, y + 6);
-            safeText((cred.source || '').substring(0, 30), 300, y + 6);
-            
-            y += 25;
-        });
+
+            doc.roundedRect(50, y, contentWidth, 25, 2).fill('#1a1a1a');
+            doc.fontSize(10).fillColor('#ff9900');
+            safeText('PASSWORD HASHES (Can be cracked offline)', 60, y + 8);
+            y += 30;
+
+            pureHashes.forEach((cred, i) => {
+                if (y > pageHeight - 60) {
+                    doc.addPage();
+                    y = 50;
+                }
+
+                doc.roundedRect(50, y, contentWidth, 40, 3).fillAndStroke('#1a1a1a', '#ff9900');
+                doc.fontSize(9).fillColor('#ff9900');
+                safeText(`User: ${cred.username || 'extracted'}`, 60, y + 8);
+                doc.fontSize(8).fillColor('#cccccc');
+                safeText(`Source: ${cred.source || 'database'}`, 300, y + 8);
+
+                doc.font('Courier').fontSize(7).fillColor('#ffcc00');
+                const hashValue = cred.hash || cred.password || '';
+                safeText(hashValue.substring(0, 70), 60, y + 24);
+                doc.font('Helvetica');
+
+                y += 45;
+            });
+
+            y += 15;
+        }
+
+        // SSH PRIVATE KEYS - Maximum fear factor
+        if (sshKeys.length > 0) {
+            doc.addPage();
+
+            // Full page red warning for SSH keys
+            doc.rect(0, 0, pageWidth, 80).fill('#8b0000');
+            doc.fontSize(10).fillColor('#ffffff');
+            safeText('⚠ CRITICAL SECURITY BREACH ⚠', 50, 20);
+            doc.fontSize(22).fillColor('#ffffff');
+            safeText('SSH PRIVATE KEYS EXTRACTED', 50, 40);
+            doc.fontSize(9).fillColor('#ffaaaa');
+            safeText('These keys provide COMPLETE SERVER ACCESS without passwords', 50, 65);
+
+            y = 100;
+
+            doc.roundedRect(50, y, contentWidth, 50, 5).fillAndStroke('#2d0a0a', '#ff0000');
+            doc.fontSize(11).fillColor('#ff4444');
+            safeText('THESE PRIVATE KEYS MUST BE REVOKED IMMEDIATELY', 60, y + 10);
+            doc.fontSize(8).fillColor('#ff8888');
+            safeText('1. Remove corresponding public keys from all ~/.ssh/authorized_keys files', 60, y + 25);
+            safeText('2. Generate new key pairs for all affected users', 60, y + 36);
+            safeText('3. Audit all systems these keys may have accessed', 60, y + 47);
+
+            y += 65;
+
+            sshKeys.forEach((key, i) => {
+                if (y > pageHeight - 250) {
+                    doc.addPage();
+                    y = 50;
+                }
+
+                const keyContent = key.password || '';
+                const keyLines = keyContent.split('\n');
+                const boxHeight = Math.min(keyLines.length * 10 + 30, 200);
+
+                doc.roundedRect(50, y, contentWidth, boxHeight, 3).fillAndStroke('#0a0a0a', colors.critical);
+
+                doc.fontSize(9).fillColor(colors.critical);
+                safeText(`SSH PRIVATE KEY #${i + 1}`, 60, y + 8);
+                doc.fontSize(7).fillColor('#888888');
+                safeText(`Target: ${key.target || key.source || 'unknown'}`, 250, y + 8);
+
+                // Display the actual key content - THIS IS THE FEAR FACTOR
+                doc.font('Courier').fontSize(6).fillColor('#00ff00');
+                let keyY = y + 22;
+                keyLines.slice(0, 15).forEach(line => {
+                    safeText(line.substring(0, 85), 60, keyY);
+                    keyY += 10;
+                });
+                if (keyLines.length > 15) {
+                    doc.fillColor('#888888');
+                    safeText(`... ${keyLines.length - 15} more lines ...`, 60, keyY);
+                }
+                doc.font('Helvetica');
+
+                y += boxHeight + 15;
+            });
+        }
+
+        // Final scary summary
+        if (y > pageHeight - 100) {
+            doc.addPage();
+            y = 50;
+        }
+
+        doc.roundedRect(50, y, contentWidth, 70, 5).fillAndStroke('#1a0000', colors.critical);
+        doc.fontSize(12).fillColor(colors.critical);
+        safeText('EXPOSURE SUMMARY', 60, y + 12);
+        doc.fontSize(10).fillColor('#ff6666');
+        safeText(`Total Credentials Exposed: ${creds.length}`, 60, y + 30);
+        safeText(`Plaintext Passwords: ${regularCreds.length}`, 60, y + 44);
+        safeText(`Password Hashes: ${pureHashes.length}`, 250, y + 44);
+        safeText(`SSH Private Keys: ${sshKeys.length}`, 400, y + 44);
+        doc.fontSize(8).fillColor('#cc4444');
+        safeText('With these credentials, an attacker has the same access as your legitimate users.', 60, y + 58);
     }
     
     // ============ RECOMMENDATIONS ============

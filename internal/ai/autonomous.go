@@ -283,9 +283,15 @@ func (a *AutoPentester) GetNextAction(ctx context.Context, state *PentestState) 
 	sshCredentials := make(map[string]CredentialFind) // Track SSH creds for recon
 	sshReuseAttempted := make(map[string]bool)        // Track password reuse attempts
 
+	sshReconDone := false
 	for _, action := range state.ActionHistory {
 		key := fmt.Sprintf("%s:%s", action.Type, action.Target)
 		completedActions[key] = true
+
+		// Track if ssh_recon was successfully completed
+		if action.Type == "ssh_recon" && action.Success {
+			sshReconDone = true
+		}
 
 		// Track password reuse attempts by checking options
 		if action.Type == "ssh_login" && action.Options != nil {
@@ -316,7 +322,10 @@ func (a *AutoPentester) GetNextAction(ctx context.Context, state *PentestState) 
 			sshPorts = append(sshPorts, p.Port)
 		}
 		// Find all HTTP ports by common ports
-		if p.Port == 80 || p.Port == 443 || p.Port == 8080 || p.Port == 8081 || p.Port == 8082 || p.Port == 8000 || p.Port == 8443 || p.Port == 3000 || p.Port == 5000 || p.Port == 9000 {
+		if p.Port == 80 || p.Port == 443 || p.Port == 3000 || p.Port == 5000 || p.Port == 8000 ||
+			p.Port == 8080 || p.Port == 8081 || p.Port == 8082 || p.Port == 8083 || p.Port == 8084 ||
+			p.Port == 8085 || p.Port == 8443 || p.Port == 8888 || p.Port == 8922 || p.Port == 8929 ||
+			p.Port == 9000 || p.Port == 9001 || p.Port == 9200 || p.Port == 5601 {
 			httpPorts = append(httpPorts, p.Port)
 		}
 		// Also check by service name for non-standard ports
@@ -334,7 +343,7 @@ func (a *AutoPentester) GetNextAction(ctx context.Context, state *PentestState) 
 						sshPorts = append(sshPorts, p.Port)
 					}
 				}
-				if svc.Name == "http" || svc.Name == "https" || svc.Name == "http-proxy" || svc.Name == "http-alt" {
+				if strings.HasPrefix(svc.Name, "http") || svc.Name == "https" || strings.Contains(svc.Name, "web") {
 					found := false
 					for _, hp := range httpPorts {
 						if hp == p.Port {
@@ -366,62 +375,89 @@ func (a *AutoPentester) GetNextAction(ctx context.Context, state *PentestState) 
 	for key := range completedActions {
 		completedList = append(completedList, key)
 	}
+
+	// Add explicit status notes
+	var statusNotes []string
+	if sshReconDone {
+		statusNotes = append(statusNotes, "SSH_RECON_COMPLETED=true (DO NOT run ssh_recon again!)")
+	}
+
 	summary := a.compactState(state)
 
 	// Get RAG exploit recommendations for AI context
 	exploitRecs := a.getExploitRecommendations(state)
 
-	prompt := fmt.Sprintf(`You are an expert penetration tester doing a real engagement. Analyze the target and decide what to investigate next.
+	statusStr := ""
+	if len(statusNotes) > 0 {
+		statusStr = "\nSTATUS: " + strings.Join(statusNotes, ", ") + "\n"
+	}
 
+	prompt := fmt.Sprintf(`You are an AGGRESSIVE and CURIOUS penetration tester. Your job is to find EVERYTHING - leave no stone unturned!
+%s
 TARGET STATE:
 %s
 
 %s
 
-ALREADY COMPLETED (DO NOT REPEAT THESE):
+ALREADY DONE (pick something DIFFERENT):
 %s
 
-AVAILABLE ACTIONS:
+BE CURIOUS! Check ports/services you haven't tested yet. Don't give up after a few tries.
 
-DATABASE/SERVICE CHECKS - Check these first, often misconfigured!
-- redis_check: Check Redis for no-auth access (target=ip) - port 6379
-- mongodb_check: Check MongoDB for no-auth (target=ip:27017)
-- mysql_check: Check MySQL default creds root/empty (target=ip:3306)
-- postgres_check: Check PostgreSQL default creds (target=ip:5432)
-- ftp_anon: Check FTP anonymous login (target=ip) - port 21
+ACTIONS (grouped by priority):
 
-CREDENTIAL ATTACKS - Try default/common creds on services!
-- ssh_login: SSH brute force with common creds (target=ip:port) - ALWAYS try on SSH ports!
-- service_scan: Grab service banners to identify versions (target=ip:port)
+=== PRIORITY 1: QUICK WINS (check first!) ===
+- redis_check: Redis no-auth (target=ip, port 6379) - often wide open!
+- mongodb_check: MongoDB no-auth (target=ip:27017) - data goldmine
+- mysql_check: MySQL default creds (target=ip:3306)
+- postgres_check: PostgreSQL default creds (target=ip:5432)
+- ftp_anon: FTP anonymous login (target=ip)
+- ssh_login: SSH brute force (target=ip:port) - try ALL SSH ports!
 
-WEB RECONNAISSANCE - Scan EVERY HTTP port!
-- web_scan: Scan web app for vulnerabilities (target=http://ip:port)
-- dir_scan: Find hidden directories/files (target=http://ip:port)
-- api_fuzz: Discover API endpoints, test auth bypass (target=http://ip:port)
+=== PRIORITY 2: RPC SERVICES (often vulnerable!) ===
+- xmlrpc_exploit: XML-RPC RCE (target=ip:8086) - CRITICAL, often has system.execute!
+- jsonrpc_exploit: JSON-RPC secrets (target=ip:8087) - leaks private keys!
+- grpc_exploit: gRPC RCE (target=ip:50051) - direct command execution!
+- rmi_exploit: Java RMI deserialization (target=ip:1099) - classic RCE!
+- rpcbind_scan: NFS/NIS enumeration (target=ip:111) - finds mountable shares
+- nfs_exploit: Mount NFS shares (target=ip:2049) - steal SSH keys!
+- msrpc_scan: MS-RPC enumeration (target=ip:135)
 
-WEB EXPLOITATION - Try on ALL web ports (80, 443, 3000, 5000, 8080, 8081, etc)
-- sqli_exploit: SQL injection to extract data (target=http://ip:port) - TRY ON EVERY HTTP PORT
-- cmd_inject: Command injection for RCE (target=http://ip:port)
+=== PRIORITY 3: WEB APPS (test EVERY http port!) ===
+- web_scan: Full web vuln scan (target=http://ip:port)
+- sqli_exploit: SQL injection (target=http://ip:port) - try ports 80,443,3000,5000,8080,8081,8082,8083,8084
+- cmd_inject: Command injection RCE (target=http://ip:port)
 - lfi_exploit: Local file inclusion (target=http://ip:port)
+- dir_scan: Find hidden paths (target=http://ip:port)
+- api_fuzz: API endpoint discovery (target=http://ip:port)
 - xss_scan: Cross-site scripting (target=http://ip:port)
 
-POST-EXPLOITATION - After finding credentials
-- crack_hash: Crack password hashes (target=hash_value, hash_type=md5)
-- ssh_recon: Run commands on compromised SSH (target=ip:port, options: username, password)
-- cred_spray: Try creds on other services (target=ip:port, options: service, username, password)
+=== PRIORITY 4: SSL/SERVICE ENUM ===
+- ssl_connect: SSL traffic analysis (target=ip:443)
+- service_scan: Banner grab (target=ip:port) - identify versions
 
-- complete: ONLY use when you've tested ALL open ports thoroughly
+=== PRIORITY 5: POST-EXPLOITATION (after creds found) ===
+- ssh_recon: MUST run after ssh_login success! (target=ip:port)
+- cred_spray: Try found creds on other services
+- crack_hash: Crack any password hashes found
 
-STRATEGY:
-1. Check databases/services for no-auth FIRST (Redis, MongoDB, FTP anon)
-2. Try SSH login on ALL SSH ports (22, 2222, etc) with common credentials
-3. Run sqli_exploit on EVERY HTTP port - this often finds credentials!
-4. If you find password hashes, crack them immediately
-5. Try found credentials on other services (SSH, MySQL, etc)
-6. DON'T complete until you've tried exploits on ALL HTTP ports!
+=== COMPLETE (use sparingly!) ===
+- complete: ONLY after thoroughly testing - did you try ALL these ports?
+  * SSH ports (22, 2222)
+  * RPC ports (8086, 8087, 50051, 1099, 111)
+  * Web ports (80, 443, 3000, 5000, 8080, 8081, 8082, 8083, 8084)
+  * Databases (3306, 5432, 27017, 6379)
 
-Reply JSON only (pick ONE action):
-{"action":"x","target":"ip:port","reasoning":"why this matters","risk_level":"low|med|high"}`, summary, exploitRecs, strings.Join(completedList, ", "))
+RULES:
+1. NEVER repeat exact same action+target - try a DIFFERENT port or action!
+2. If something failed, try a DIFFERENT service, not the same one
+3. Be CURIOUS - test unusual ports, they often have vulns!
+4. After ssh_login succeeds -> IMMEDIATELY do ssh_recon!
+5. Test ALL RPC ports - they're gold mines for RCE
+6. Don't complete early - explore MORE services first!
+
+Reply with JSON only:
+{"action":"x","target":"ip:port","reasoning":"why this specific target","risk_level":"low|med|high|critical"}`, statusStr, summary, exploitRecs, strings.Join(completedList, ", "))
 
 	messages := []Message{
 		{Role: "user", Content: prompt},
@@ -476,11 +512,58 @@ Reply JSON only (pick ONE action):
 		"nuclei_scan": true, "xss_scan": true, "nikto_scan": true,
 		"subdomain_enum": true, "ssl_scan": true, "api_fuzz": true,
 		"crack_hash": true, "mysql_check": true, "mongodb_check": true,
-		"postgres_check": true,
+		"postgres_check": true, "ssl_connect": true,
+		"xmlrpc_exploit": true, "jsonrpc_exploit": true, "rmi_exploit": true,
+		"rpcbind_scan": true, "nfs_exploit": true, "grpc_exploit": true,
+		"msrpc_scan": true,
 	}
 	if !validActions[decision.Action] {
 		decision.Action = "complete"
 		decision.Reasoning = "Unknown action, completing"
+	}
+
+	// Prevent early completion - check if key ports were tested
+	if decision.Action == "complete" && len(state.ActionHistory) < 20 {
+		// Check what's been tested
+		testedPorts := make(map[string]bool)
+		for _, a := range state.ActionHistory {
+			testedPorts[a.Type+":"+a.Target] = true
+		}
+
+		// Key ports that MUST be tested before completion
+		mustTest := []struct {
+			action string
+			port   string
+		}{
+			{"xmlrpc_exploit", "8086"},
+			{"jsonrpc_exploit", "8087"},
+			{"grpc_exploit", "50051"},
+			{"rpcbind_scan", "111"},
+			{"ssl_connect", "443"},
+		}
+
+		// Find untested critical services
+		for _, mt := range mustTest {
+			// Check if this port is open
+			portOpen := false
+			for _, p := range state.OpenPorts {
+				if fmt.Sprintf("%d", p.Port) == mt.port {
+					portOpen = true
+					break
+				}
+			}
+			if portOpen {
+				key := mt.action + ":" + state.Target + ":" + mt.port
+				keyAlt := mt.action + ":" + state.Target
+				if !testedPorts[key] && !testedPorts[keyAlt] {
+					// Override complete with this untested action
+					decision.Action = mt.action
+					decision.Target = state.Target + ":" + mt.port
+					decision.Reasoning = fmt.Sprintf("Auto-redirect: Must test %s on port %s before completing", mt.action, mt.port)
+					break
+				}
+			}
+		}
 	}
 
 	// Detect loops - if last 3 actions are the same, force completion

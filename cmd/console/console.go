@@ -17,6 +17,7 @@ import (
 	"pentestai/internal/ai"
 	"pentestai/internal/exploit"
 	"pentestai/internal/recon"
+	"pentestai/internal/remediation"
 	"pentestai/internal/webapp"
 )
 
@@ -174,6 +175,8 @@ func (c *Console) execute(line string) {
 		c.cmdHistory(args)
 	case "report":
 		c.cmdReport(args)
+	case "autofix", "fix":
+		c.cmdAutoFix(args)
 	case "clear":
 		fmt.Print("\033[H\033[2J")
 	case "banner":
@@ -229,6 +232,13 @@ AI Commands
     analyze                 AI analyzes current scan/module data
     autopwn <target>        Autonomous AI-driven pentest
     auto <target>           Alias for autopwn
+
+Remediation Commands
+====================
+    autofix <scan.json>     Generate fixes for vulnerabilities
+    autofix --safe <file>   Auto-apply safe fixes (headers, configs)
+    autofix --review <file> Generate all patches for human review
+    fix <scan.json>         Alias for autofix
 
 Examples
 ========
@@ -893,7 +903,9 @@ func (c *Console) cmdAutoPwn(args []string) {
 
 	// Auto-save JSON for PDF generation
 	if c.lastScanState != nil {
-		jsonFile := fmt.Sprintf("pentest_%s_%s.json", strings.ReplaceAll(target, ".", "_"), time.Now().Format("20060102_150405"))
+		// Ensure output directory exists
+		os.MkdirAll("output/scans", 0755)
+		jsonFile := fmt.Sprintf("output/scans/pentest_%s_%s.json", strings.ReplaceAll(target, ".", "_"), time.Now().Format("20060102_150405"))
 		c.saveReportJSON(jsonFile)
 		fmt.Printf("%s[*]%s Scan results saved to: %s\n", colorBlue, colorReset, jsonFile)
 		fmt.Printf("%s[*]%s Generate PDF with: report pdf %s\n", colorBlue, colorReset, jsonFile)
@@ -954,7 +966,8 @@ func (c *Console) cmdReport(args []string) {
 
 	switch format {
 	case "json":
-		outputFile := "pentest_report.json"
+		os.MkdirAll("output/scans", 0755)
+		outputFile := "output/scans/pentest_report.json"
 		if len(args) > 1 {
 			outputFile = args[1]
 		}
@@ -966,8 +979,9 @@ func (c *Console) cmdReport(args []string) {
 		fmt.Printf("%s[+]%s JSON report saved to: %s\n", colorGreen, colorReset, outputFile)
 
 	case "pdf":
+		os.MkdirAll("output/reports", 0755)
 		inputFile := ""
-		outputFile := "pentest_report.pdf"
+		outputFile := "output/reports/pentest_report.pdf"
 		if len(args) > 1 {
 			inputFile = args[1]
 		}
@@ -989,7 +1003,8 @@ func (c *Console) cmdReport(args []string) {
 		c.generatePDF(inputFile, outputFile)
 
 	case "html":
-		outputFile := "pentest_report.html"
+		os.MkdirAll("output/reports", 0755)
+		outputFile := "output/reports/pentest_report.html"
 		if len(args) > 1 {
 			outputFile = args[1]
 		}
@@ -1001,7 +1016,8 @@ func (c *Console) cmdReport(args []string) {
 		fmt.Printf("%s[+]%s HTML report saved to: %s\n", colorGreen, colorReset, outputFile)
 
 	case "markdown", "md":
-		outputFile := "pentest_report.md"
+		os.MkdirAll("output/reports", 0755)
+		outputFile := "output/reports/pentest_report.md"
 		if len(args) > 1 {
 			outputFile = args[1]
 		}
@@ -1038,7 +1054,10 @@ type VulnEntry struct {
 	Type        string `json:"type"`
 	Severity    string `json:"severity"`
 	Target      string `json:"target"`
+	Service     string `json:"service,omitempty"`
 	Description string `json:"description"`
+	Evidence    string `json:"evidence,omitempty"`
+	Remediation string `json:"remediation,omitempty"`
 }
 
 type CredEntry struct {
@@ -1080,7 +1099,10 @@ func (c *Console) saveReportJSON(filename string) {
 			Type:        vuln.Type,
 			Severity:    vuln.Severity,
 			Target:      vuln.Target,
+			Service:     vuln.Service,
 			Description: vuln.Description,
+			Evidence:    vuln.Evidence,
+			Remediation: vuln.Remediation,
 		})
 	}
 
@@ -1431,4 +1453,330 @@ func parsePorts(s string) []int {
 		}
 	}
 	return ports
+}
+
+// cmdAutoFix generates remediation fixes for vulnerabilities found in a scan
+func (c *Console) cmdAutoFix(args []string) {
+	if len(args) == 0 {
+		fmt.Printf("%s[-]%s Usage: autofix [--safe|--review|--apply-lab] <scan_result.json>\n", colorRed, colorReset)
+		fmt.Println("  --safe      : Auto-apply safe fixes (security headers, configs)")
+		fmt.Println("  --review    : Generate all patches for human review (default)")
+		fmt.Println("  --apply-lab : Actually patch and rebuild the lab Docker containers")
+		fmt.Println("\nExample: autofix --apply-lab output/scans/pentest_127_0_0_1_20251213.json")
+		return
+	}
+
+	// Parse arguments
+	mode := remediation.FixModeReview // Default to review mode (safe)
+	applyLab := false
+	var scanFile string
+
+	for _, arg := range args {
+		switch arg {
+		case "--safe":
+			mode = remediation.FixModeSafe
+		case "--review":
+			mode = remediation.FixModeReview
+		case "--apply-lab":
+			applyLab = true
+			mode = remediation.FixModeSafe
+		default:
+			if !strings.HasPrefix(arg, "-") {
+				scanFile = arg
+			}
+		}
+	}
+
+	// If --apply-lab, patch the containers based on scan results
+	if applyLab {
+		if scanFile == "" {
+			fmt.Printf("%s[-]%s --apply-lab requires a scan file\n", colorRed, colorReset)
+			fmt.Println("Example: autofix --apply-lab output/scans/pentest_127_0_0_1_*.json")
+			return
+		}
+		c.applyLabFixes(scanFile)
+		return
+	}
+
+	if scanFile == "" {
+		// Try to use last scan result
+		if c.lastScanState != nil {
+			fmt.Printf("%s[*]%s Using last autopwn scan results\n", colorBlue, colorReset)
+		} else {
+			fmt.Printf("%s[-]%s No scan file specified and no recent scan results\n", colorRed, colorReset)
+			return
+		}
+	}
+
+	// Load vulnerabilities from scan file or last state
+	var vulns []remediation.VulnInput
+
+	if scanFile != "" {
+		// Load from JSON file
+		data, err := os.ReadFile(scanFile)
+		if err != nil {
+			fmt.Printf("%s[-]%s Failed to read scan file: %v\n", colorRed, colorReset, err)
+			return
+		}
+
+		var scanResult struct {
+			Vulnerabilities []struct {
+				Type        string `json:"type"`
+				Target      string `json:"target"`
+				Service     string `json:"service"`
+				Description string `json:"description"`
+				Evidence    string `json:"evidence"`
+			} `json:"vulnerabilities"`
+		}
+
+		if err := json.Unmarshal(data, &scanResult); err != nil {
+			fmt.Printf("%s[-]%s Failed to parse scan file: %v\n", colorRed, colorReset, err)
+			return
+		}
+
+		for _, v := range scanResult.Vulnerabilities {
+			vulns = append(vulns, remediation.VulnInput{
+				Type:        v.Type,
+				Target:      v.Target,
+				Service:     v.Service,
+				Description: v.Description,
+				Evidence:    v.Evidence,
+			})
+		}
+
+		fmt.Printf("%s[*]%s Loaded %d vulnerabilities from %s\n", colorBlue, colorReset, len(vulns), scanFile)
+	} else if c.lastScanState != nil {
+		// Use last scan state
+		for _, v := range c.lastScanState.Vulnerabilities {
+			vulns = append(vulns, remediation.VulnInput{
+				Type:        v.Type,
+				Target:      v.Target,
+				Service:     v.Service,
+				Description: v.Description,
+				Evidence:    v.Evidence,
+			})
+		}
+		fmt.Printf("%s[*]%s Using %d vulnerabilities from last scan\n", colorBlue, colorReset, len(vulns))
+	}
+
+	if len(vulns) == 0 {
+		fmt.Printf("%s[*]%s No vulnerabilities found to fix\n", colorYellow, colorReset)
+		return
+	}
+
+	// Create autofix instance
+	outputDir := "output"
+	fixer := remediation.NewAutoFixer(mode, outputDir)
+
+	// Print mode
+	modeStr := "REVIEW"
+	if mode == remediation.FixModeSafe {
+		modeStr = "SAFE"
+	}
+
+	fmt.Printf("\n%s╔══════════════════════════════════════════════════════════════╗%s\n", colorBold+colorCyan, colorReset)
+	fmt.Printf("%s║              AUTOFIX - %s MODE                          ║%s\n", colorBold+colorCyan, modeStr, colorReset)
+	fmt.Printf("%s╚══════════════════════════════════════════════════════════════╝%s\n\n", colorBold+colorCyan, colorReset)
+
+	if mode == remediation.FixModeSafe {
+		fmt.Printf("%s[*]%s Safe mode: Only applying fixes that cannot break functionality\n", colorBlue, colorReset)
+	} else {
+		fmt.Printf("%s[*]%s Review mode: Generating patches for human review\n", colorBlue, colorReset)
+	}
+
+	// Generate fixes
+	result := fixer.GenerateFixes(vulns)
+
+	// Print report
+	report := fixer.GenerateReport(result)
+	fmt.Println(report)
+
+	// Summary
+	fmt.Printf("\n%s[+]%s Remediation complete!\n", colorGreen, colorReset)
+	fmt.Printf("    Patches saved to: %s/patches/\n", outputDir)
+
+	if result.FixesApplied > 0 {
+		fmt.Printf("    %s%d fixes auto-applied%s (safe fixes)\n", colorGreen, result.FixesApplied, colorReset)
+	}
+	if result.FixesPending > 0 {
+		fmt.Printf("    %s%d fixes pending review%s\n", colorYellow, result.FixesPending, colorReset)
+	}
+
+	fmt.Printf("\n%s[*]%s Next steps:\n", colorBlue, colorReset)
+	fmt.Println("    1. Review patches in output/patches/")
+	fmt.Println("    2. Test in staging environment")
+	fmt.Println("    3. Apply to production")
+	fmt.Println("    4. Re-run: autopwn <target> to verify fixes")
+}
+
+// labFixMapping maps vulnerability types to lab service fixes
+var labFixMapping = map[string]struct {
+	service     string // Docker service name
+	vulnFile    string // Vulnerable file path
+	secureFile  string // Secure file path
+	description string
+}{
+	"rpc_command_injection": {"xmlrpc", "lab/services/xmlrpc/server.py", "lab/services/xmlrpc/server_secure.py", "XML-RPC command injection"},
+	"xmlrpc":                {"xmlrpc", "lab/services/xmlrpc/server.py", "lab/services/xmlrpc/server_secure.py", "XML-RPC vulnerability"},
+	"grpc_command_injection": {"grpc-server", "lab/services/grpc/server.py", "lab/services/grpc/server_secure.py", "gRPC command injection"},
+	"grpc":                   {"grpc-server", "lab/services/grpc/server.py", "lab/services/grpc/server_secure.py", "gRPC vulnerability"},
+	"rpc_info_disclosure":    {"jsonrpc", "lab/services/jsonrpc/server.py", "lab/services/jsonrpc/server_secure.py", "JSON-RPC info disclosure"},
+	"jsonrpc":                {"jsonrpc", "lab/services/jsonrpc/server.py", "lab/services/jsonrpc/server_secure.py", "JSON-RPC vulnerability"},
+}
+
+// applyLabFixes patches the lab Docker containers based on vulnerabilities found
+func (c *Console) applyLabFixes(scanFile string) {
+	fmt.Printf("\n%s╔══════════════════════════════════════════════════════════════╗%s\n", colorBold+colorCyan, colorReset)
+	fmt.Printf("%s║          APPLYING FIXES TO LAB CONTAINERS                    ║%s\n", colorBold+colorCyan, colorReset)
+	fmt.Printf("%s╚══════════════════════════════════════════════════════════════╝%s\n\n", colorBold+colorCyan, colorReset)
+
+	// Load vulnerabilities from scan file
+	data, err := os.ReadFile(scanFile)
+	if err != nil {
+		fmt.Printf("%s[-]%s Failed to read scan file: %v\n", colorRed, colorReset, err)
+		return
+	}
+
+	var scanResult struct {
+		Vulnerabilities []struct {
+			Type        string `json:"type"`
+			Target      string `json:"target"`
+			Service     string `json:"service"`
+			Severity    string `json:"severity"`
+			Description string `json:"description"`
+		} `json:"vulnerabilities"`
+	}
+
+	if err := json.Unmarshal(data, &scanResult); err != nil {
+		fmt.Printf("%s[-]%s Failed to parse scan file: %v\n", colorRed, colorReset, err)
+		return
+	}
+
+	fmt.Printf("%s[*]%s Loaded %d vulnerabilities from %s\n", colorBlue, colorReset, len(scanResult.Vulnerabilities), scanFile)
+
+	// Track which services need to be patched and rebuilt
+	servicesToRebuild := make(map[string]bool)
+	patchedFiles := make(map[string]bool)
+
+	for _, vuln := range scanResult.Vulnerabilities {
+		// Check if we have a fix for this vulnerability type
+		fix, exists := labFixMapping[vuln.Type]
+		if !exists {
+			// Try matching by service name
+			if vuln.Service != "" {
+				fix, exists = labFixMapping[vuln.Service]
+			}
+		}
+		if !exists {
+			// Try partial match on type
+			for key, f := range labFixMapping {
+				if strings.Contains(vuln.Type, key) || strings.Contains(key, vuln.Type) {
+					fix = f
+					exists = true
+					break
+				}
+			}
+		}
+
+		if !exists {
+			continue // No fix available for this vuln type
+		}
+
+		// Skip if already patched this file
+		if patchedFiles[fix.vulnFile] {
+			continue
+		}
+
+		// Check if secure version exists
+		if _, err := os.Stat(fix.secureFile); os.IsNotExist(err) {
+			fmt.Printf("%s[!]%s No secure version for %s\n", colorYellow, colorReset, fix.description)
+			continue
+		}
+
+		// Backup original if not already backed up
+		backupPath := fix.vulnFile + ".vuln"
+		if _, err := os.Stat(backupPath); os.IsNotExist(err) {
+			origData, err := os.ReadFile(fix.vulnFile)
+			if err != nil {
+				fmt.Printf("%s[-]%s Failed to read %s: %v\n", colorRed, colorReset, fix.vulnFile, err)
+				continue
+			}
+			if err := os.WriteFile(backupPath, origData, 0644); err != nil {
+				fmt.Printf("%s[-]%s Failed to backup %s: %v\n", colorRed, colorReset, fix.vulnFile, err)
+				continue
+			}
+			fmt.Printf("%s[*]%s Backed up: %s\n", colorBlue, colorReset, fix.vulnFile)
+		}
+
+		// Apply the fix
+		secureData, err := os.ReadFile(fix.secureFile)
+		if err != nil {
+			fmt.Printf("%s[-]%s Failed to read secure file: %v\n", colorRed, colorReset, err)
+			continue
+		}
+		if err := os.WriteFile(fix.vulnFile, secureData, 0644); err != nil {
+			fmt.Printf("%s[-]%s Failed to apply fix: %v\n", colorRed, colorReset, err)
+			continue
+		}
+
+		fmt.Printf("%s[+]%s %sPATCHED%s: %s (%s)\n", colorGreen, colorReset, colorGreen, colorReset, fix.description, vuln.Severity)
+		patchedFiles[fix.vulnFile] = true
+		servicesToRebuild[fix.service] = true
+	}
+
+	if len(servicesToRebuild) == 0 {
+		fmt.Printf("\n%s[*]%s No patchable vulnerabilities found in scan\n", colorYellow, colorReset)
+		return
+	}
+
+	fmt.Printf("\n%s[+]%s Patched %d services\n", colorGreen, colorReset, len(servicesToRebuild))
+
+	// Build list of services to rebuild
+	var services []string
+	for svc := range servicesToRebuild {
+		services = append(services, svc)
+	}
+
+	// Rebuild only affected containers
+	fmt.Printf("\n%s[*]%s Rebuilding Docker containers: %v\n", colorBlue, colorReset, services)
+
+	args := append([]string{"-f", "lab/docker-compose.yml", "up", "-d", "--build"}, services...)
+	cmd := exec.Command("docker-compose", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("%s[-]%s Failed to rebuild containers: %v\n", colorRed, colorReset, err)
+		fmt.Printf("    Try manually: cd lab && docker-compose up -d --build %s\n", strings.Join(services, " "))
+		return
+	}
+
+	fmt.Printf("\n%s[+]%s Containers rebuilt successfully!\n", colorGreen, colorReset)
+	fmt.Printf("\n%s[*]%s Verify fixes with: autopwn 127.0.0.1\n", colorBlue, colorReset)
+	fmt.Printf("%s[*]%s The patched vulnerabilities should now be FIXED\n", colorBlue, colorReset)
+}
+
+// revertLabFixes restores vulnerable versions for testing
+func (c *Console) revertLabFixes() {
+	fixes := []struct {
+		name       string
+		vulnerable string
+	}{
+		{"XML-RPC", "lab/services/xmlrpc/server.py"},
+		{"gRPC", "lab/services/grpc/server.py"},
+		{"JSON-RPC", "lab/services/jsonrpc/server.py"},
+	}
+
+	for _, fix := range fixes {
+		backupPath := fix.vulnerable + ".vuln"
+		if _, err := os.Stat(backupPath); err == nil {
+			data, _ := os.ReadFile(backupPath)
+			os.WriteFile(fix.vulnerable, data, 0644)
+			fmt.Printf("%s[*]%s Reverted: %s\n", colorBlue, colorReset, fix.name)
+		}
+	}
+
+	cmd := exec.Command("docker-compose", "-f", "lab/docker-compose.yml", "up", "-d", "--build", "xmlrpc", "grpc-server", "jsonrpc")
+	cmd.Run()
+	fmt.Printf("%s[+]%s Lab reverted to vulnerable state\n", colorGreen, colorReset)
 }

