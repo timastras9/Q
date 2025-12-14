@@ -438,7 +438,9 @@ ACTIONS (grouped by priority):
 
 === PRIORITY 5: POST-EXPLOITATION (after creds found) ===
 - ssh_recon: MUST run after ssh_login success! (target=ip:port)
-- cred_spray: Try found creds on other services
+- ssh_pivot: After ssh_recon, discover internal networks via SSH! (target=ip:port) - finds hidden hosts!
+- pivot_scan: After ssh_pivot finds hosts, DEEP SCAN internal hosts! (target=ip) - finds internal services!
+- cred_spray: Try found creds on MySQL/PostgreSQL/FTP (target=ip) - HIGH PRIORITY when creds exist!
 - crack_hash: Crack any password hashes found
 
 === COMPLETE (use sparingly!) ===
@@ -447,6 +449,7 @@ ACTIONS (grouped by priority):
   * RPC ports (8086, 8087, 50051, 1099, 111)
   * Web ports (80, 443, 3000, 5000, 8080, 8081, 8082, 8083, 8084)
   * Databases (3306, 5432, 27017, 6379)
+  * Did you run cred_spray after finding credentials?
 
 RULES:
 1. NEVER repeat exact same action+target - try a DIFFERENT port or action!
@@ -455,6 +458,7 @@ RULES:
 4. After ssh_login succeeds -> IMMEDIATELY do ssh_recon!
 5. Test ALL RPC ports - they're gold mines for RCE
 6. Don't complete early - explore MORE services first!
+7. After ANY credentials found -> run cred_spray to test password reuse on databases!
 
 Reply with JSON only:
 {"action":"x","target":"ip:port","reasoning":"why this specific target","risk_level":"low|med|high|critical"}`, statusStr, summary, exploitRecs, strings.Join(completedList, ", "))
@@ -507,7 +511,7 @@ Reply with JSON only:
 		"ssh_exec": true, "ftp_login": true, "ftp_anon": true,
 		"http_login": true, "redis_check": true, "cmd_inject": true,
 		"sqli_exploit": true, "complete": true, "full_scan": true,
-		"ssh_recon": true, "reverse_shell": true, "cred_spray": true,
+		"ssh_recon": true, "ssh_pivot": true, "pivot_scan": true, "reverse_shell": true, "cred_spray": true,
 		"lfi_exploit": true, "ssrf_exploit": true, "file_upload": true,
 		"nuclei_scan": true, "xss_scan": true, "nikto_scan": true,
 		"subdomain_enum": true, "ssl_scan": true, "api_fuzz": true,
@@ -609,6 +613,82 @@ Reply with JSON only:
 		decision = a.findAlternativeAction(state, &decision, completedActions, failedCounts, successCounts)
 	}
 
+	// FORCE ssh_recon after ssh_login success
+	if decision.Action == "complete" {
+		for _, action := range state.ActionHistory {
+			if action.Type == "ssh_login" && action.Success {
+				// ssh_login was successful, check if we've done ssh_recon
+				reconKey := "ssh_recon:" + action.Target
+				if !completedActions[reconKey] && failedCounts[reconKey] < 1 {
+					decision.Action = "ssh_recon"
+					decision.Target = action.Target
+					decision.Reasoning = "SSH login succeeded - running post-exploitation recon before completing"
+					decision.RiskLevel = "high"
+					break
+				}
+			}
+		}
+	}
+
+	// FORCE cred_spray if AI tries to complete but we have usable credentials and haven't sprayed
+	if decision.Action == "complete" {
+		credSprayKey := "cred_spray:" + state.Target
+		if !completedActions[credSprayKey] && failedCounts["cred_spray:"+state.Target] < 1 {
+			hasUsableCreds := false
+			for _, cred := range state.Credentials {
+				if cred.Username != "" && cred.Password != "" {
+					hasUsableCreds = true
+					break
+				}
+			}
+			if hasUsableCreds {
+				decision.Action = "cred_spray"
+				decision.Target = state.Target
+				decision.Reasoning = "Credentials found - trying password reuse on MySQL, PostgreSQL, FTP before completing"
+				decision.RiskLevel = "high"
+			}
+		}
+	}
+
+	// FORCE ssh_pivot if AI tries to complete but we have SSH session and haven't pivoted
+	if decision.Action == "complete" {
+		// Check if ssh_recon succeeded
+		for _, action := range state.ActionHistory {
+			if action.Type == "ssh_recon" && action.Success {
+				// ssh_recon was successful, check if we've done ssh_pivot
+				pivotKey := "ssh_pivot:" + action.Target
+				if !completedActions[pivotKey] && failedCounts[pivotKey] < 1 {
+					decision.Action = "ssh_pivot"
+					decision.Target = action.Target
+					decision.Reasoning = "SSH session established - discovering internal networks before completing"
+					decision.RiskLevel = "high"
+					break
+				}
+			}
+		}
+	}
+
+	// FORCE pivot_scan if AI tries to complete but we have discovered internal hosts
+	if decision.Action == "complete" {
+		// Check if there are discovered hosts that haven't been scanned
+		hasUnscannedHosts := false
+		for _, host := range state.DiscoveredHosts {
+			if host.Status == "pivot_discovered" {
+				hasUnscannedHosts = true
+				break
+			}
+		}
+		if hasUnscannedHosts {
+			pivotScanKey := "pivot_scan:" + state.Target
+			if !completedActions[pivotScanKey] && failedCounts[pivotScanKey] < 1 {
+				decision.Action = "pivot_scan"
+				decision.Target = state.Target
+				decision.Reasoning = "Internal hosts discovered via pivot - deep scanning before completing"
+				decision.RiskLevel = "high"
+			}
+		}
+	}
+
 	return &decision, nil
 }
 
@@ -653,12 +733,6 @@ func (a *AutoPentester) findAlternativeAction(state *PentestState, current *AIDe
 
 	// Try each alternative action
 	for _, alt := range alternativeActions {
-		altBaseKey := alt.action + ":" + state.Target
-		// Skip if already tried (success or 2+ failures)
-		if successCounts[altBaseKey] >= 1 || failedCounts[altBaseKey] >= 2 {
-			continue
-		}
-
 		// Check if any of the ports are open
 		for _, port := range alt.ports {
 			portOpen := false
@@ -672,30 +746,62 @@ func (a *AutoPentester) findAlternativeAction(state *PentestState, current *AIDe
 				continue
 			}
 
-			// Check if this specific port was already tested
-			testKey := fmt.Sprintf("%s:%s:%d", alt.action, state.Target, port)
-			if completedActions[testKey] {
+			// Build the full target string (with URL prefix if needed)
+			var fullTarget string
+			if alt.urlPrefix != "" {
+				fullTarget = fmt.Sprintf("%s%s:%d", alt.urlPrefix, state.Target, port)
+			} else {
+				fullTarget = fmt.Sprintf("%s:%d", state.Target, port)
+			}
+
+			// Check completedActions using the exact format: action:fullTarget
+			completedKey := fmt.Sprintf("%s:%s", alt.action, fullTarget)
+			if completedActions[completedKey] {
+				continue
+			}
+
+			// Also check against normalized success/failure counts
+			normalizedKey := alt.action + ":" + state.Target
+			if successCounts[normalizedKey] >= 1 || failedCounts[normalizedKey] >= 2 {
 				continue
 			}
 
 			// Found an untested action!
 			decision.Action = alt.action
-			if alt.urlPrefix != "" {
-				decision.Target = fmt.Sprintf("%s%s:%d", alt.urlPrefix, state.Target, port)
-			} else {
-				decision.Target = fmt.Sprintf("%s:%d", state.Target, port)
-			}
+			decision.Target = fullTarget
 			decision.Reasoning = alt.reasoning
+			return decision
+		}
+	}
+
+	// If credentials found and cred_spray not done, try credential spray
+	credSprayKey := "cred_spray:" + state.Target
+	if len(state.Credentials) > 0 && !completedActions[credSprayKey] && failedCounts[credSprayKey] < 1 {
+		// Check if we have any credentials with username:password (not just tokens)
+		hasUsableCreds := false
+		for _, cred := range state.Credentials {
+			if cred.Username != "" && cred.Password != "" {
+				hasUsableCreds = true
+				break
+			}
+		}
+		if hasUsableCreds {
+			decision.Action = "cred_spray"
+			decision.Target = state.Target
+			decision.Reasoning = "Credentials found - trying password reuse on MySQL, PostgreSQL, FTP"
 			return decision
 		}
 	}
 
 	// If no alternatives found, try any untested port with banner_grab
 	for _, p := range state.OpenPorts {
-		testKey := fmt.Sprintf("banner_grab:%s:%d", state.Target, p.Port)
-		if !completedActions[testKey] {
+		fullTarget := fmt.Sprintf("%s:%d", state.Target, p.Port)
+		completedKey := fmt.Sprintf("banner_grab:%s", fullTarget)
+		normalizedKey := "banner_grab:" + state.Target
+
+		if !completedActions[completedKey] && successCounts[normalizedKey] < 1 && failedCounts[normalizedKey] < 2 {
 			decision.Action = "banner_grab"
-			decision.Target = fmt.Sprintf("%s:%d", state.Target, p.Port)
+			decision.Target = fullTarget
 			decision.Reasoning = fmt.Sprintf("Grabbing banner from port %d for more info", p.Port)
 			return decision
 		}

