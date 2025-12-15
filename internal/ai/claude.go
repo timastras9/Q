@@ -18,9 +18,9 @@ type ClaudeClient struct {
 	model        string
 	lastRequest  time.Time
 	minInterval  time.Duration
-	TotalInput   int     // Total input tokens used
-	TotalOutput  int     // Total output tokens used
-	RequestCount int     // Number of API requests made
+	TotalInput   int // Total input tokens used
+	TotalOutput  int // Total output tokens used
+	RequestCount int // Number of API requests made
 }
 
 // GetCost returns estimated cost in USD based on Claude Sonnet pricing

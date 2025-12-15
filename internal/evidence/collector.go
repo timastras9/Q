@@ -32,21 +32,21 @@ const (
 
 // Evidence represents a piece of proof for a finding
 type Evidence struct {
-	ID           string                 `json:"id"`
-	Type         EvidenceType           `json:"type"`
-	Target       string                 `json:"target"`
-	Port         int                    `json:"port,omitempty"`
-	Service      string                 `json:"service,omitempty"`
-	Title        string                 `json:"title"`
-	Description  string                 `json:"description"`
-	CapturedAt   time.Time              `json:"captured_at"`
-	Data         string                 `json:"data"`          // Text content or base64 for binary
-	DataHash     string                 `json:"data_hash"`     // SHA256 hash
-	IsBinary     bool                   `json:"is_binary"`
-	FilePath     string                 `json:"file_path,omitempty"` // If saved to disk
-	Metadata     map[string]interface{} `json:"metadata,omitempty"`
-	FindingRef   string                 `json:"finding_ref,omitempty"` // Reference to associated finding
-	Redacted     bool                   `json:"redacted"`              // Sensitive data redacted
+	ID          string                 `json:"id"`
+	Type        EvidenceType           `json:"type"`
+	Target      string                 `json:"target"`
+	Port        int                    `json:"port,omitempty"`
+	Service     string                 `json:"service,omitempty"`
+	Title       string                 `json:"title"`
+	Description string                 `json:"description"`
+	CapturedAt  time.Time              `json:"captured_at"`
+	Data        string                 `json:"data"`      // Text content or base64 for binary
+	DataHash    string                 `json:"data_hash"` // SHA256 hash
+	IsBinary    bool                   `json:"is_binary"`
+	FilePath    string                 `json:"file_path,omitempty"` // If saved to disk
+	Metadata    map[string]interface{} `json:"metadata,omitempty"`
+	FindingRef  string                 `json:"finding_ref,omitempty"` // Reference to associated finding
+	Redacted    bool                   `json:"redacted"`              // Sensitive data redacted
 }
 
 // EvidenceCollector manages evidence gathering

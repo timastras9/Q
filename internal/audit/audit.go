@@ -13,21 +13,21 @@ import (
 type EventType string
 
 const (
-	EventScanStart      EventType = "scan_start"
-	EventScanComplete   EventType = "scan_complete"
-	EventTargetAdded    EventType = "target_added"
-	EventPortDiscovered EventType = "port_discovered"
-	EventServiceFound   EventType = "service_found"
-	EventVulnFound      EventType = "vulnerability_found"
-	EventCredTested     EventType = "credential_tested"
-	EventCredFound      EventType = "credential_found"
-	EventExploitCheck   EventType = "exploit_check"
-	EventExploitRun     EventType = "exploit_run"
+	EventScanStart       EventType = "scan_start"
+	EventScanComplete    EventType = "scan_complete"
+	EventTargetAdded     EventType = "target_added"
+	EventPortDiscovered  EventType = "port_discovered"
+	EventServiceFound    EventType = "service_found"
+	EventVulnFound       EventType = "vulnerability_found"
+	EventCredTested      EventType = "credential_tested"
+	EventCredFound       EventType = "credential_found"
+	EventExploitCheck    EventType = "exploit_check"
+	EventExploitRun      EventType = "exploit_run"
 	EventEvidenceCapture EventType = "evidence_captured"
-	EventActionBlocked  EventType = "action_blocked"
-	EventScopeViolation EventType = "scope_violation"
-	EventAIDecision     EventType = "ai_decision"
-	EventError          EventType = "error"
+	EventActionBlocked   EventType = "action_blocked"
+	EventScopeViolation  EventType = "scope_violation"
+	EventAIDecision      EventType = "ai_decision"
+	EventError           EventType = "error"
 	EventReportGenerated EventType = "report_generated"
 )
 
@@ -42,20 +42,20 @@ const (
 
 // AuditEvent represents a single logged event
 type AuditEvent struct {
-	Timestamp   time.Time              `json:"timestamp"`
-	EventID     string                 `json:"event_id"`
-	EventType   EventType              `json:"event_type"`
-	Severity    Severity               `json:"severity"`
-	Target      string                 `json:"target,omitempty"`
-	Port        int                    `json:"port,omitempty"`
-	Action      string                 `json:"action,omitempty"`
-	Module      string                 `json:"module,omitempty"`
-	Success     bool                   `json:"success"`
-	Message     string                 `json:"message"`
-	Details     map[string]interface{} `json:"details,omitempty"`
-	Evidence    *Evidence              `json:"evidence,omitempty"`
-	EngagementID string                `json:"engagement_id,omitempty"`
-	TesterID    string                 `json:"tester_id,omitempty"`
+	Timestamp    time.Time              `json:"timestamp"`
+	EventID      string                 `json:"event_id"`
+	EventType    EventType              `json:"event_type"`
+	Severity     Severity               `json:"severity"`
+	Target       string                 `json:"target,omitempty"`
+	Port         int                    `json:"port,omitempty"`
+	Action       string                 `json:"action,omitempty"`
+	Module       string                 `json:"module,omitempty"`
+	Success      bool                   `json:"success"`
+	Message      string                 `json:"message"`
+	Details      map[string]interface{} `json:"details,omitempty"`
+	Evidence     *Evidence              `json:"evidence,omitempty"`
+	EngagementID string                 `json:"engagement_id,omitempty"`
+	TesterID     string                 `json:"tester_id,omitempty"`
 }
 
 // Evidence captures proof of vulnerability

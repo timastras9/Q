@@ -41,22 +41,22 @@ func (p Priority) String() string {
 
 // Recommendation contains remediation guidance
 type Recommendation struct {
-	VulnType        string            `json:"vuln_type"`
-	Title           string            `json:"title"`
-	Severity        Severity          `json:"severity"`
-	Priority        Priority          `json:"priority"`
-	Description     string            `json:"description"`
-	Impact          string            `json:"impact"`
-	Remediation     string            `json:"remediation"`
-	QuickFix        string            `json:"quick_fix,omitempty"`
-	LongTermFix     string            `json:"long_term_fix,omitempty"`
-	References      []string          `json:"references"`
-	CWE             []string          `json:"cwe"`
-	OWASP           []string          `json:"owasp"`
-	Compliance      []string          `json:"compliance,omitempty"`
-	TestingSteps    []string          `json:"testing_steps,omitempty"`
-	CodeExamples    map[string]string `json:"code_examples,omitempty"`
-	EffortEstimate  string            `json:"effort_estimate"`
+	VulnType       string            `json:"vuln_type"`
+	Title          string            `json:"title"`
+	Severity       Severity          `json:"severity"`
+	Priority       Priority          `json:"priority"`
+	Description    string            `json:"description"`
+	Impact         string            `json:"impact"`
+	Remediation    string            `json:"remediation"`
+	QuickFix       string            `json:"quick_fix,omitempty"`
+	LongTermFix    string            `json:"long_term_fix,omitempty"`
+	References     []string          `json:"references"`
+	CWE            []string          `json:"cwe"`
+	OWASP          []string          `json:"owasp"`
+	Compliance     []string          `json:"compliance,omitempty"`
+	TestingSteps   []string          `json:"testing_steps,omitempty"`
+	CodeExamples   map[string]string `json:"code_examples,omitempty"`
+	EffortEstimate string            `json:"effort_estimate"`
 }
 
 // Database holds all remediation recommendations
@@ -474,15 +474,15 @@ location / {
 3. Subscribe to security advisories
 4. Use automated vulnerability scanning
 5. Consider using containers for easier updates`,
-		QuickFix: "Apply security patches for critical vulnerabilities immediately.",
+		QuickFix:    "Apply security patches for critical vulnerabilities immediately.",
 		LongTermFix: "Implement automated patch management and regular update cycles.",
 		References: []string{
 			"https://nvd.nist.gov/",
 			"https://cve.mitre.org/",
 		},
-		CWE:        []string{"CWE-1104"},
-		OWASP:      []string{"A06:2021 - Vulnerable and Outdated Components"},
-		Compliance: []string{"PCI-DSS 6.2", "HIPAA", "SOC 2"},
+		CWE:            []string{"CWE-1104"},
+		OWASP:          []string{"A06:2021 - Vulnerable and Outdated Components"},
+		Compliance:     []string{"PCI-DSS 6.2", "HIPAA", "SOC 2"},
 		EffortEstimate: "Varies - depends on software and changes required",
 	}
 
@@ -533,8 +533,8 @@ app.use(cors({
 		References: []string{
 			"https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/01-Information_Gathering/",
 		},
-		CWE:   []string{"CWE-200", "CWE-209"},
-		OWASP: []string{"A05:2021 - Security Misconfiguration"},
+		CWE:            []string{"CWE-200", "CWE-209"},
+		OWASP:          []string{"A05:2021 - Security Misconfiguration"},
 		EffortEstimate: "Low - 2-4 hours",
 	}
 
@@ -624,8 +624,8 @@ add_header Referrer-Policy "strict-origin-when-cross-origin" always;`,
 			"https://owasp.org/www-community/attacks/Server_Side_Request_Forgery",
 			"https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html",
 		},
-		CWE:   []string{"CWE-918"},
-		OWASP: []string{"A10:2021 - Server-Side Request Forgery"},
+		CWE:            []string{"CWE-918"},
+		OWASP:          []string{"A10:2021 - Server-Side Request Forgery"},
 		EffortEstimate: "Medium - 2-4 days",
 	}
 }

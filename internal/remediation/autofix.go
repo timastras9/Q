@@ -46,11 +46,11 @@ type FixResult struct {
 
 // AutoFixer handles automatic remediation
 type AutoFixer struct {
-	db         *Database
-	mode       FixMode
-	outputDir  string
-	fixes      []*Fix
-	dryRun     bool
+	db        *Database
+	mode      FixMode
+	outputDir string
+	fixes     []*Fix
+	dryRun    bool
 }
 
 // NewAutoFixer creates a new auto-fixer

@@ -1,5 +1,3 @@
-version: "3.8"
-
 # Modern Enterprise Vulnerable Lab
 # Simulates realistic corporate security posture circa 2024
 # Contains: Cloud-native apps, CI/CD, legacy systems, misconfigurations
@@ -422,7 +420,7 @@ services:
 
   # Java RMI Registry (classic RPC attack surface)
   java-rmi:
-    image: openjdk:11-jdk-slim
+    image: eclipse-temurin:11-jdk
     container_name: lab-rmi
     ports:
       - "1099:1099"

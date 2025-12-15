@@ -81,38 +81,38 @@ type CrackedHash struct {
 
 // CrackJob represents a cracking job
 type CrackJob struct {
-	ID          string
-	Hashes      []string
-	HashType    HashType
-	Wordlist    string
-	Rules       string
-	BruteForce  bool
-	Mask        string // for brute force (e.g., ?a?a?a?a?a?a)
-	MaxLength   int
-	Status      string
-	StartTime   time.Time
-	Results     []CrackedHash
-	Progress    float64
-	mu          sync.Mutex
+	ID         string
+	Hashes     []string
+	HashType   HashType
+	Wordlist   string
+	Rules      string
+	BruteForce bool
+	Mask       string // for brute force (e.g., ?a?a?a?a?a?a)
+	MaxLength  int
+	Status     string
+	StartTime  time.Time
+	Results    []CrackedHash
+	Progress   float64
+	mu         sync.Mutex
 }
 
 // Cracker provides password cracking capabilities
 type Cracker struct {
-	wordlistDir    string
+	wordlistDir     string
 	defaultWordlist string
-	hashcatPath    string
-	johnPath       string
-	maxWorkers     int
+	hashcatPath     string
+	johnPath        string
+	maxWorkers      int
 }
 
 // New creates a new Cracker instance
 func New(wordlistDir string) *Cracker {
 	return &Cracker{
-		wordlistDir:    wordlistDir,
+		wordlistDir:     wordlistDir,
 		defaultWordlist: "/usr/share/wordlists/rockyou.txt",
-		hashcatPath:    "hashcat",
-		johnPath:       "john",
-		maxWorkers:     4,
+		hashcatPath:     "hashcat",
+		johnPath:        "john",
+		maxWorkers:      4,
 	}
 }
 
@@ -346,7 +346,7 @@ func (c *Cracker) CrackWithHashcat(ctx context.Context, hashFile string, hashTyp
 	}
 
 	// Parse results
-	return c.parseHashcatOutput(hashFile + ".cracked", hashType)
+	return c.parseHashcatOutput(hashFile+".cracked", hashType)
 }
 
 // CrackWPA2Handshake attempts to crack a WPA2 handshake capture

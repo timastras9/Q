@@ -32,14 +32,14 @@ type AutoRunner struct {
 }
 
 type RunnerCallbacks struct {
-	OnActionStart  func(action string, target string)
-	OnActionEnd    func(action string, success bool, output string)
-	OnFinding      func(finding Finding)
-	OnCredential   func(cred CredentialFind)
-	OnPhaseChange  func(phase string)
-	OnComplete     func(report *PentestReport)
-	OnError        func(err error)
-	OnAIDecision   func(decision *AIDecision)
+	OnActionStart func(action string, target string)
+	OnActionEnd   func(action string, success bool, output string)
+	OnFinding     func(finding Finding)
+	OnCredential  func(cred CredentialFind)
+	OnPhaseChange func(phase string)
+	OnComplete    func(report *PentestReport)
+	OnError       func(err error)
+	OnAIDecision  func(decision *AIDecision)
 }
 
 func NewAutoRunner(client *ClaudeClient) *AutoRunner {

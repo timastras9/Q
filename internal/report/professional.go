@@ -19,51 +19,51 @@ import (
 // ProfessionalReport is an executive-quality penetration test report
 type ProfessionalReport struct {
 	// Metadata
-	Title           string    `json:"title"`
-	EngagementID    string    `json:"engagement_id"`
-	CustomerName    string    `json:"customer_name"`
-	PreparedBy      string    `json:"prepared_by"`
-	PreparedFor     string    `json:"prepared_for"`
-	ReportDate      time.Time `json:"report_date"`
-	Classification  string    `json:"classification"`
-	Version         string    `json:"version"`
+	Title          string    `json:"title"`
+	EngagementID   string    `json:"engagement_id"`
+	CustomerName   string    `json:"customer_name"`
+	PreparedBy     string    `json:"prepared_by"`
+	PreparedFor    string    `json:"prepared_for"`
+	ReportDate     time.Time `json:"report_date"`
+	Classification string    `json:"classification"`
+	Version        string    `json:"version"`
 
 	// Engagement Details
-	EngagementType  string    `json:"engagement_type"`
-	StartDate       time.Time `json:"start_date"`
-	EndDate         time.Time `json:"end_date"`
-	Scope           []string  `json:"scope"`
-	Methodology     string    `json:"methodology"`
-	SafetyLevel     string    `json:"safety_level"`
+	EngagementType string    `json:"engagement_type"`
+	StartDate      time.Time `json:"start_date"`
+	EndDate        time.Time `json:"end_date"`
+	Scope          []string  `json:"scope"`
+	Methodology    string    `json:"methodology"`
+	SafetyLevel    string    `json:"safety_level"`
 
 	// Executive Summary
 	ExecutiveSummary *ExecutiveBrief `json:"executive_summary"`
 
 	// Findings
-	Findings         []FindingDetail  `json:"findings"`
-	FindingsSummary  *FindingsSummary `json:"findings_summary"`
+	Findings        []FindingDetail  `json:"findings"`
+	FindingsSummary *FindingsSummary `json:"findings_summary"`
 
 	// Technical Details
-	ReconResults     *ReconSummary    `json:"recon_results,omitempty"`
-	Evidence         []EvidenceItem   `json:"evidence,omitempty"`
+	ReconResults *ReconSummary  `json:"recon_results,omitempty"`
+	Evidence     []EvidenceItem `json:"evidence,omitempty"`
 
 	// Recommendations
-	Recommendations  []RecommendationItem `json:"recommendations"`
-	RemediationPlan  *RemediationPlan     `json:"remediation_plan"`
+	Recommendations []RecommendationItem `json:"recommendations"`
+	RemediationPlan *RemediationPlan     `json:"remediation_plan"`
 
 	// Appendices
-	AuditLog         []audit.AuditEvent `json:"audit_log,omitempty"`
-	Methodology_Detail string           `json:"methodology_detail,omitempty"`
+	AuditLog           []audit.AuditEvent `json:"audit_log,omitempty"`
+	Methodology_Detail string             `json:"methodology_detail,omitempty"`
 }
 
 // ExecutiveBrief provides high-level summary for executives
 type ExecutiveBrief struct {
-	OverallRisk       string `json:"overall_risk"`
-	RiskScore         int    `json:"risk_score"` // 0-100
-	KeyFindings       string `json:"key_findings"`
-	BusinessImpact    string `json:"business_impact"`
-	ImmediateActions  string `json:"immediate_actions"`
-	StrategicOutlook  string `json:"strategic_outlook"`
+	OverallRisk      string `json:"overall_risk"`
+	RiskScore        int    `json:"risk_score"` // 0-100
+	KeyFindings      string `json:"key_findings"`
+	BusinessImpact   string `json:"business_impact"`
+	ImmediateActions string `json:"immediate_actions"`
+	StrategicOutlook string `json:"strategic_outlook"`
 }
 
 // FindingDetail provides comprehensive finding information
@@ -87,20 +87,20 @@ type FindingDetail struct {
 
 // FindingsSummary provides statistics
 type FindingsSummary struct {
-	Total           int            `json:"total"`
-	BySeverity      map[string]int `json:"by_severity"`
-	ByCategory      map[string]int `json:"by_category"`
-	ByStatus        map[string]int `json:"by_status"`
-	TopCategories   []string       `json:"top_categories"`
+	Total         int            `json:"total"`
+	BySeverity    map[string]int `json:"by_severity"`
+	ByCategory    map[string]int `json:"by_category"`
+	ByStatus      map[string]int `json:"by_status"`
+	TopCategories []string       `json:"top_categories"`
 }
 
 // ReconSummary summarizes reconnaissance results
 type ReconSummary struct {
-	HostsDiscovered  int      `json:"hosts_discovered"`
-	PortsOpen        int      `json:"ports_open"`
-	ServicesFound    int      `json:"services_found"`
-	TopServices      []string `json:"top_services"`
-	ExposedServices  []string `json:"exposed_services"`
+	HostsDiscovered int      `json:"hosts_discovered"`
+	PortsOpen       int      `json:"ports_open"`
+	ServicesFound   int      `json:"services_found"`
+	TopServices     []string `json:"top_services"`
+	ExposedServices []string `json:"exposed_services"`
 }
 
 // EvidenceItem for report
@@ -124,10 +124,10 @@ type RecommendationItem struct {
 
 // RemediationPlan provides structured fix guidance
 type RemediationPlan struct {
-	ImmediatePriority []string `json:"immediate"` // Fix within 24-48 hours
-	ShortTerm         []string `json:"short_term"` // Fix within 1-2 weeks
+	ImmediatePriority []string `json:"immediate"`   // Fix within 24-48 hours
+	ShortTerm         []string `json:"short_term"`  // Fix within 1-2 weeks
 	MediumTerm        []string `json:"medium_term"` // Fix within 1-3 months
-	LongTerm          []string `json:"long_term"` // Ongoing improvements
+	LongTerm          []string `json:"long_term"`   // Ongoing improvements
 }
 
 // GenerateProfessionalReport creates a comprehensive report from assessment results
@@ -451,14 +451,14 @@ func severityRank(severity string) int {
 
 func getImpactByType(vulnType string) string {
 	impacts := map[string]string{
-		"sql_injection":        "Complete database compromise, data theft, authentication bypass",
-		"xss":                  "Session hijacking, credential theft, malware distribution",
-		"default_credentials":  "Unauthorized system access, lateral movement",
-		"lfi":                  "Source code disclosure, configuration exposure, potential RCE",
-		"command_injection":    "Complete system compromise, remote code execution",
-		"ssrf":                 "Internal network access, cloud metadata exposure",
-		"redis_unauth":         "Data theft, server compromise",
-		"mongodb_unauth":       "Complete database access, data theft",
+		"sql_injection":       "Complete database compromise, data theft, authentication bypass",
+		"xss":                 "Session hijacking, credential theft, malware distribution",
+		"default_credentials": "Unauthorized system access, lateral movement",
+		"lfi":                 "Source code disclosure, configuration exposure, potential RCE",
+		"command_injection":   "Complete system compromise, remote code execution",
+		"ssrf":                "Internal network access, cloud metadata exposure",
+		"redis_unauth":        "Data theft, server compromise",
+		"mongodb_unauth":      "Complete database access, data theft",
 	}
 	if impact, ok := impacts[strings.ToLower(strings.ReplaceAll(vulnType, " ", "_"))]; ok {
 		return impact

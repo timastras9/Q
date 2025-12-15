@@ -21,15 +21,15 @@ type WebScanner struct {
 }
 
 type WebScanResult struct {
-	URL         string
-	StartTime   time.Time
-	EndTime     time.Time
-	Findings    []Finding
-	Headers     map[string]string
+	URL          string
+	StartTime    time.Time
+	EndTime      time.Time
+	Findings     []Finding
+	Headers      map[string]string
 	Technologies []string
-	Forms       []Form
-	Links       []string
-	Cookies     []Cookie
+	Forms        []Form
+	Links        []string
+	Cookies      []Cookie
 }
 
 type Finding struct {
@@ -44,9 +44,9 @@ type Finding struct {
 }
 
 type Form struct {
-	Action  string
-	Method  string
-	Inputs  []FormInput
+	Action string
+	Method string
+	Inputs []FormInput
 }
 
 type FormInput struct {
@@ -335,22 +335,22 @@ func (w *WebScanner) detectTechnologies(headers http.Header, body string) []stri
 
 	// Body patterns
 	patterns := map[string]string{
-		"WordPress":    `wp-content|wp-includes|WordPress`,
-		"Drupal":       `Drupal|drupal\.js`,
-		"Joomla":       `Joomla|/media/jui/`,
-		"Laravel":      `laravel_session|Laravel`,
-		"Django":       `csrfmiddlewaretoken|django`,
-		"Rails":        `csrf-token.*authenticity_token|Rails`,
-		"React":        `react\.production\.min\.js|__REACT`,
-		"Vue.js":       `vue\.js|Vue\.js`,
-		"Angular":      `ng-app|angular\.js`,
-		"jQuery":       `jquery.*\.js`,
-		"Bootstrap":    `bootstrap\.min\.(css|js)`,
-		"ASP.NET":      `__VIEWSTATE|__EVENTVALIDATION`,
-		"PHP":          `\.php["\?]|PHPSESSID`,
-		"Nginx":        `nginx`,
-		"Apache":       `Apache`,
-		"IIS":          `Microsoft-IIS`,
+		"WordPress": `wp-content|wp-includes|WordPress`,
+		"Drupal":    `Drupal|drupal\.js`,
+		"Joomla":    `Joomla|/media/jui/`,
+		"Laravel":   `laravel_session|Laravel`,
+		"Django":    `csrfmiddlewaretoken|django`,
+		"Rails":     `csrf-token.*authenticity_token|Rails`,
+		"React":     `react\.production\.min\.js|__REACT`,
+		"Vue.js":    `vue\.js|Vue\.js`,
+		"Angular":   `ng-app|angular\.js`,
+		"jQuery":    `jquery.*\.js`,
+		"Bootstrap": `bootstrap\.min\.(css|js)`,
+		"ASP.NET":   `__VIEWSTATE|__EVENTVALIDATION`,
+		"PHP":       `\.php["\?]|PHPSESSID`,
+		"Nginx":     `nginx`,
+		"Apache":    `Apache`,
+		"IIS":       `Microsoft-IIS`,
 	}
 
 	bodyLower := strings.ToLower(body)

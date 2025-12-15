@@ -462,7 +462,7 @@ func (s *Scanner) UDPScan(ctx context.Context, target string, ports []int) (*Hos
 		default:
 		}
 
-		addr := fmt.Sprintf("%s:%d", target, port)
+		addr := net.JoinHostPort(target, fmt.Sprintf("%d", port))
 		conn, err := net.DialTimeout("udp", addr, s.timeout)
 		if err != nil {
 			continue
@@ -513,16 +513,16 @@ func grabBanner(conn net.Conn, port int, timeout time.Duration) string {
 
 func getProbe(port int) []byte {
 	probes := map[int][]byte{
-		21:   []byte(""),                                                                       // FTP sends banner first
-		22:   []byte(""),                                                                       // SSH sends banner first
-		25:   []byte("EHLO probe\r\n"),                                                         // SMTP
-		80:   []byte("GET / HTTP/1.0\r\nHost: localhost\r\n\r\n"),                              // HTTP
-		110:  []byte(""),                                                                       // POP3 sends banner
-		143:  []byte(""),                                                                       // IMAP sends banner
-		443:  nil,                                                                              // HTTPS needs TLS
-		3306: []byte(""),                                                                       // MySQL sends banner
-		6379: []byte("INFO\r\n"),                                                               // Redis
-		8080: []byte("GET / HTTP/1.0\r\nHost: localhost\r\n\r\n"),                              // HTTP alt
+		21:   []byte(""),                                          // FTP sends banner first
+		22:   []byte(""),                                          // SSH sends banner first
+		25:   []byte("EHLO probe\r\n"),                            // SMTP
+		80:   []byte("GET / HTTP/1.0\r\nHost: localhost\r\n\r\n"), // HTTP
+		110:  []byte(""),                                          // POP3 sends banner
+		143:  []byte(""),                                          // IMAP sends banner
+		443:  nil,                                                 // HTTPS needs TLS
+		3306: []byte(""),                                          // MySQL sends banner
+		6379: []byte("INFO\r\n"),                                  // Redis
+		8080: []byte("GET / HTTP/1.0\r\nHost: localhost\r\n\r\n"), // HTTP alt
 		27017: []byte{58, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 212, 7, 0, 0, 0, 0, 0, 0, 97, 100,
 			109, 105, 110, 46, 36, 99, 109, 100, 0, 0, 0, 0, 0, 255, 255, 255, 255, 27, 0, 0, 0,
 			16, 105, 115, 109, 97, 115, 116, 101, 114, 0, 1, 0, 0, 0, 0}, // MongoDB
@@ -536,8 +536,8 @@ func getProbe(port int) []byte {
 
 func getUDPProbe(port int) []byte {
 	probes := map[int][]byte{
-		53:  {0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // DNS
-		123: {0x1b, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, // NTP
+		53:  {0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},                                                                                                                                                                         // DNS
+		123: {0x1b, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},                                                                                              // NTP
 		161: {0x30, 0x26, 0x02, 0x01, 0x01, 0x04, 0x06, 0x70, 0x75, 0x62, 0x6c, 0x69, 0x63, 0xa1, 0x19, 0x02, 0x04, 0x71, 0xba, 0x90, 0x42, 0x02, 0x01, 0x00, 0x02, 0x01, 0x00, 0x30, 0x0b, 0x30, 0x09, 0x06, 0x05, 0x2b, 0x06, 0x01, 0x02, 0x01, 0x05, 0x00}, // SNMP
 	}
 	if probe, ok := probes[port]; ok {
@@ -565,7 +565,7 @@ func identifyService(port int) Service {
 		995:   {Name: "pop3s"},
 		1433:  {Name: "mssql"},
 		1521:  {Name: "oracle"},
-		2222:  {Name: "ssh"},  // Common alternate SSH port
+		2222:  {Name: "ssh"}, // Common alternate SSH port
 		3306:  {Name: "mysql"},
 		3389:  {Name: "rdp"},
 		5432:  {Name: "postgresql"},

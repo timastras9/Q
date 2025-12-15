@@ -15,20 +15,20 @@ import (
 
 // Finding represents a security finding
 type Finding struct {
-	ID           string                 `json:"id"`
-	Type         string                 `json:"type"`
-	Title        string                 `json:"title"`
-	Severity     string                 `json:"severity"`
-	Target       string                 `json:"target"`
-	Port         int                    `json:"port,omitempty"`
-	Service      string                 `json:"service,omitempty"`
-	Description  string                 `json:"description"`
-	Evidence     []*evidence.Evidence   `json:"evidence,omitempty"`
-	Remediation  *remediation.Recommendation `json:"remediation,omitempty"`
-	CVSS         float64                `json:"cvss,omitempty"`
-	CVE          []string               `json:"cve,omitempty"`
-	VerifiedAt   time.Time              `json:"verified_at"`
-	Metadata     map[string]interface{} `json:"metadata,omitempty"`
+	ID          string                      `json:"id"`
+	Type        string                      `json:"type"`
+	Title       string                      `json:"title"`
+	Severity    string                      `json:"severity"`
+	Target      string                      `json:"target"`
+	Port        int                         `json:"port,omitempty"`
+	Service     string                      `json:"service,omitempty"`
+	Description string                      `json:"description"`
+	Evidence    []*evidence.Evidence        `json:"evidence,omitempty"`
+	Remediation *remediation.Recommendation `json:"remediation,omitempty"`
+	CVSS        float64                     `json:"cvss,omitempty"`
+	CVE         []string                    `json:"cve,omitempty"`
+	VerifiedAt  time.Time                   `json:"verified_at"`
+	Metadata    map[string]interface{}      `json:"metadata,omitempty"`
 }
 
 // AssessmentResult contains the complete assessment output
@@ -50,27 +50,27 @@ type AssessmentResult struct {
 
 // AssessmentSummary provides overview statistics
 type AssessmentSummary struct {
-	TotalFindings    int            `json:"total_findings"`
-	CriticalCount    int            `json:"critical_count"`
-	HighCount        int            `json:"high_count"`
-	MediumCount      int            `json:"medium_count"`
-	LowCount         int            `json:"low_count"`
-	InfoCount        int            `json:"info_count"`
-	HostsScanned     int            `json:"hosts_scanned"`
-	PortsDiscovered  int            `json:"ports_discovered"`
-	ServicesFound    int            `json:"services_found"`
-	CredentialsFound int            `json:"credentials_found"`
-	RiskRating       string         `json:"risk_rating"`
-	TopVulns         []string       `json:"top_vulns"`
+	TotalFindings    int      `json:"total_findings"`
+	CriticalCount    int      `json:"critical_count"`
+	HighCount        int      `json:"high_count"`
+	MediumCount      int      `json:"medium_count"`
+	LowCount         int      `json:"low_count"`
+	InfoCount        int      `json:"info_count"`
+	HostsScanned     int      `json:"hosts_scanned"`
+	PortsDiscovered  int      `json:"ports_discovered"`
+	ServicesFound    int      `json:"services_found"`
+	CredentialsFound int      `json:"credentials_found"`
+	RiskRating       string   `json:"risk_rating"`
+	TopVulns         []string `json:"top_vulns"`
 }
 
 // SafeCallbacks provides progress updates
 type SafeCallbacks struct {
-	OnStart         func(target string)
-	OnProgress      func(phase string, progress float64, message string)
-	OnFinding       func(finding Finding)
-	OnComplete      func(result *AssessmentResult)
-	OnError         func(err error)
+	OnStart          func(target string)
+	OnProgress       func(phase string, progress float64, message string)
+	OnFinding        func(finding Finding)
+	OnComplete       func(result *AssessmentResult)
+	OnError          func(err error)
 	OnScopeViolation func(target, action string)
 }
 
@@ -155,7 +155,7 @@ func (r *SafeRunner) AddFinding(f Finding) {
 
 	// Audit log
 	r.auditLog.LogVulnerability(f.Target, f.Port, f.Type, f.Description,
-		audit.Severity(severityToAudit(f.Severity)), nil)
+		severityToAudit(f.Severity), nil)
 
 	// Callback
 	if r.callbacks.OnFinding != nil {
@@ -278,9 +278,9 @@ func (r *SafeRunner) GenerateResult(ctx context.Context, targets []string, start
 		Findings:     r.GetFindings(),
 		Summary:      r.GenerateSummary(),
 		Metadata: map[string]interface{}{
-			"tester":     r.cfg.TesterName,
-			"tool":       "PentestAI",
-			"version":    "1.0.0",
+			"tester":      r.cfg.TesterName,
+			"tool":        "PentestAI",
+			"version":     "1.0.0",
 			"safety_mode": r.cfg.SafetyLevel.String(),
 		},
 	}
@@ -312,18 +312,14 @@ func (r *SafeRunner) IncrementStats(hosts, ports, services, creds int) {
 
 // Helper functions
 
-func severityToAudit(sev string) int {
+func severityToAudit(sev string) audit.Severity {
 	switch strings.ToLower(sev) {
 	case "critical":
-		return 4
-	case "high":
-		return 3
-	case "medium":
-		return 2
-	case "low":
-		return 1
+		return audit.SeverityCritical
+	case "high", "medium":
+		return audit.SeverityWarning
 	default:
-		return 0
+		return audit.SeverityInfo
 	}
 }
 
@@ -363,8 +359,8 @@ func generateTopRecommendations(db *remediation.Database, findingTypes []string)
 
 // SafetyCheck provides a pre-flight check before running
 type SafetyCheck struct {
-	Passed  bool     `json:"passed"`
-	Errors  []string `json:"errors"`
+	Passed   bool     `json:"passed"`
+	Errors   []string `json:"errors"`
 	Warnings []string `json:"warnings"`
 }
 

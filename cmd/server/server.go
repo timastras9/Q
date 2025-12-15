@@ -54,9 +54,9 @@ type ScanJob struct {
 }
 
 type ScanRequest struct {
-	Target   string   `json:"target"`
-	Type     string   `json:"type"` // recon, web, exploit, full, autopwn
-	Options  []string `json:"options,omitempty"`
+	Target  string   `json:"target"`
+	Type    string   `json:"type"` // recon, web, exploit, full, autopwn
+	Options []string `json:"options,omitempty"`
 }
 
 type ScanResponse struct {
@@ -424,9 +424,9 @@ func (s *Server) handleExploit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Target   string `json:"target"`
-		Exploit  string `json:"exploit"`
-		Options  map[string]string `json:"options"`
+		Target  string            `json:"target"`
+		Exploit string            `json:"exploit"`
+		Options map[string]string `json:"options"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

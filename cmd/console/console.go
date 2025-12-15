@@ -770,12 +770,12 @@ func (c *Console) cmdAutoPwn(args []string) {
 	runner.SetCallbacks(ai.RunnerCallbacks{
 		OnPhaseChange: func(phase string) {
 			phaseNames := map[string]string{
-				"reconnaissance":         "RECONNAISSANCE",
-				"enumeration":            "ENUMERATION",
+				"reconnaissance":           "RECONNAISSANCE",
+				"enumeration":              "ENUMERATION",
 				"vulnerability_assessment": "VULNERABILITY ASSESSMENT",
-				"exploitation":           "EXPLOITATION",
-				"post_exploitation":      "POST-EXPLOITATION",
-				"reporting":              "REPORTING",
+				"exploitation":             "EXPLOITATION",
+				"post_exploitation":        "POST-EXPLOITATION",
+				"reporting":                "REPORTING",
 			}
 			name := phaseNames[phase]
 			if name == "" {
@@ -1035,11 +1035,11 @@ func (c *Console) cmdReport(args []string) {
 
 // ReportData represents the JSON structure for PDF generation
 type ReportData struct {
-	Target          string           `json:"target"`
-	Date            string           `json:"date"`
-	Tests           []TestResult     `json:"tests"`
-	Vulnerabilities []VulnEntry      `json:"vulnerabilities"`
-	Credentials     []CredEntry      `json:"credentials"`
+	Target          string       `json:"target"`
+	Date            string       `json:"date"`
+	Tests           []TestResult `json:"tests"`
+	Vulnerabilities []VulnEntry  `json:"vulnerabilities"`
+	Credentials     []CredEntry  `json:"credentials"`
 }
 
 type TestResult struct {
@@ -1075,11 +1075,11 @@ func (c *Console) saveReportJSON(filename string) {
 
 	state := c.lastScanState
 	data := ReportData{
-		Target: state.Target,
-		Date:   time.Now().Format("2006-01-02"),
-		Tests:  make([]TestResult, 0),
+		Target:          state.Target,
+		Date:            time.Now().Format("2006-01-02"),
+		Tests:           make([]TestResult, 0),
 		Vulnerabilities: make([]VulnEntry, 0),
-		Credentials: make([]CredEntry, 0),
+		Credentials:     make([]CredEntry, 0),
 	}
 
 	// Convert action history to test results
@@ -1616,8 +1616,8 @@ var labFixMapping = map[string]struct {
 	secureFile  string // Secure file path
 	description string
 }{
-	"rpc_command_injection": {"xmlrpc", "lab/services/xmlrpc/server.py", "lab/services/xmlrpc/server_secure.py", "XML-RPC command injection"},
-	"xmlrpc":                {"xmlrpc", "lab/services/xmlrpc/server.py", "lab/services/xmlrpc/server_secure.py", "XML-RPC vulnerability"},
+	"rpc_command_injection":  {"xmlrpc", "lab/services/xmlrpc/server.py", "lab/services/xmlrpc/server_secure.py", "XML-RPC command injection"},
+	"xmlrpc":                 {"xmlrpc", "lab/services/xmlrpc/server.py", "lab/services/xmlrpc/server_secure.py", "XML-RPC vulnerability"},
 	"grpc_command_injection": {"grpc-server", "lab/services/grpc/server.py", "lab/services/grpc/server_secure.py", "gRPC command injection"},
 	"grpc":                   {"grpc-server", "lab/services/grpc/server.py", "lab/services/grpc/server_secure.py", "gRPC vulnerability"},
 	"rpc_info_disclosure":    {"jsonrpc", "lab/services/jsonrpc/server.py", "lab/services/jsonrpc/server_secure.py", "JSON-RPC info disclosure"},

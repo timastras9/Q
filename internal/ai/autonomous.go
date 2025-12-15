@@ -74,16 +74,16 @@ type AIDecision struct {
 }
 
 type PentestState struct {
-	Target         string           `json:"target"`
-	Scope          []string         `json:"scope"`
-	Phase          string           `json:"phase"`
-	DiscoveredHosts []HostInfo      `json:"discovered_hosts"`
-	OpenPorts      []PortInfo       `json:"open_ports"`
-	Services       []ServiceInfo    `json:"services"`
-	Vulnerabilities []Finding       `json:"vulnerabilities"`
-	Credentials    []CredentialFind `json:"credentials"`
-	Sessions       []SessionInfo    `json:"sessions"`
-	ActionHistory  []Action         `json:"action_history"`
+	Target          string           `json:"target"`
+	Scope           []string         `json:"scope"`
+	Phase           string           `json:"phase"`
+	DiscoveredHosts []HostInfo       `json:"discovered_hosts"`
+	OpenPorts       []PortInfo       `json:"open_ports"`
+	Services        []ServiceInfo    `json:"services"`
+	Vulnerabilities []Finding        `json:"vulnerabilities"`
+	Credentials     []CredentialFind `json:"credentials"`
+	Sessions        []SessionInfo    `json:"sessions"`
+	ActionHistory   []Action         `json:"action_history"`
 }
 
 type HostInfo struct {
@@ -758,10 +758,10 @@ func (a *AutoPentester) findAlternativeAction(state *PentestState, current *AIDe
 
 	// List of alternative actions to try in priority order
 	alternativeActions := []struct {
-		action     string
-		ports      []int
-		urlPrefix  string
-		reasoning  string
+		action    string
+		ports     []int
+		urlPrefix string
+		reasoning string
 	}{
 		{"cmd_inject", []int{8080, 80, 3000, 8443}, "http://", "Trying command injection on web service"},
 		{"sqli", []int{8080, 80, 3000}, "http://", "Trying SQL injection on web service"},
@@ -976,7 +976,7 @@ type AttackPlan struct {
 }
 
 type Phase struct {
-	Name    string        `json:"name"`
+	Name    string          `json:"name"`
 	Actions []PlannedAction `json:"actions"`
 }
 
@@ -1033,15 +1033,15 @@ Write brief JSON:
 }
 
 type PentestReport struct {
-	ExecutiveSummary string            `json:"executive_summary"`
-	Scope            string            `json:"scope"`
-	Methodology      string            `json:"methodology"`
-	RiskRating       string            `json:"risk_rating"`
-	FindingsSummary  map[string]int    `json:"findings_summary"`
-	DetailedFindings []Finding         `json:"detailed_findings"`
-	CredentialsFound []CredentialFind  `json:"credentials_found"`
-	Recommendations  []string          `json:"recommendations"`
-	Conclusion       string            `json:"conclusion"`
+	ExecutiveSummary string           `json:"executive_summary"`
+	Scope            string           `json:"scope"`
+	Methodology      string           `json:"methodology"`
+	RiskRating       string           `json:"risk_rating"`
+	FindingsSummary  map[string]int   `json:"findings_summary"`
+	DetailedFindings []Finding        `json:"detailed_findings"`
+	CredentialsFound []CredentialFind `json:"credentials_found"`
+	Recommendations  []string         `json:"recommendations"`
+	Conclusion       string           `json:"conclusion"`
 }
 
 // SelectExploitForService asks AI to choose the best exploit for a service

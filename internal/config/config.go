@@ -44,9 +44,9 @@ type Config struct {
 
 	// Safety settings
 	SafetyLevel     SafetyLevel `json:"safety_level"`
-	RequireScope    bool        `json:"require_scope"`     // Must define scope before testing
-	AuditLogging    bool        `json:"audit_logging"`     // Log all actions for compliance
-	EvidenceCapture bool        `json:"evidence_capture"`  // Capture screenshots/responses
+	RequireScope    bool        `json:"require_scope"`    // Must define scope before testing
+	AuditLogging    bool        `json:"audit_logging"`    // Log all actions for compliance
+	EvidenceCapture bool        `json:"evidence_capture"` // Capture screenshots/responses
 
 	// Scope enforcement
 	AllowedTargets []string `json:"allowed_targets"` // CIDR ranges or hostnames
@@ -66,9 +66,9 @@ type Config struct {
 	MaxAICost    float64 `json:"max_ai_cost"` // Stop if API costs exceed this
 
 	// Paths
-	WordlistPath   string `json:"wordlist_path"`
+	WordlistPath    string `json:"wordlist_path"`
 	ReportOutputDir string `json:"report_output_dir"`
-	AuditLogPath   string `json:"audit_log_path"`
+	AuditLogPath    string `json:"audit_log_path"`
 
 	// Customer info for reports
 	CustomerName    string `json:"customer_name"`
@@ -268,12 +268,12 @@ func (c *Config) IsActionAllowed(action string) bool {
 
 	// Actions that are always blocked
 	blockedActions := map[string]bool{
-		"format_disk":      true,
-		"delete_files":     true,
-		"wipe_logs":        true,
+		"format_disk":       true,
+		"delete_files":      true,
+		"wipe_logs":         true,
 		"deploy_ransomware": true,
-		"dos_attack":       true,
-		"destroy":          true,
+		"dos_attack":        true,
+		"destroy":           true,
 	}
 
 	if blockedActions[action] {
@@ -305,14 +305,14 @@ func (c *Config) IsActionAllowed(action string) bool {
 	if c.SafetyLevel == SafetyStrict {
 		// In strict mode, only detection actions are allowed
 		detectionActions := map[string]bool{
-			"scan_ports":       true,
-			"version_detect":   true,
-			"vuln_check":       true,
-			"banner_grab":      true,
-			"ssl_check":        true,
-			"web_crawl":        true,
-			"dir_enum":         true,
-			"service_detect":   true,
+			"scan_ports":     true,
+			"version_detect": true,
+			"vuln_check":     true,
+			"banner_grab":    true,
+			"ssl_check":      true,
+			"web_crawl":      true,
+			"dir_enum":       true,
+			"service_detect": true,
 		}
 		return detectionActions[action]
 	}
@@ -355,8 +355,8 @@ func ProofOfConceptConfig() *Config {
 	cfg.RequireScope = true
 	cfg.AuditLogging = true
 	cfg.EvidenceCapture = true
-	cfg.MaxCredAttempts = 5      // Very limited cred attempts
-	cfg.MaxActionsPerHost = 30   // Limited actions
+	cfg.MaxCredAttempts = 5    // Very limited cred attempts
+	cfg.MaxActionsPerHost = 30 // Limited actions
 	return cfg
 }
 
