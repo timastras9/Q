@@ -171,6 +171,8 @@ func (c *Console) execute(line string) {
 		c.cmdAnalyze(args)
 	case "autopwn", "auto":
 		c.cmdAutoPwn(args)
+	case "autopwn-agents", "agents":
+		c.cmdAutoPwnAgents(args)
 	case "history":
 		c.cmdHistory(args)
 	case "report":
@@ -1779,4 +1781,121 @@ func (c *Console) revertLabFixes() {
 	cmd := exec.Command("docker-compose", "-f", "lab/docker-compose.yml", "up", "-d", "--build", "xmlrpc", "grpc-server", "jsonrpc")
 	cmd.Run()
 	fmt.Printf("%s[+]%s Lab reverted to vulnerable state\n", colorGreen, colorReset)
+}
+
+// cmdAutoPwnAgents runs the multi-agent parallel pentest
+func (c *Console) cmdAutoPwnAgents(args []string) {
+	if len(args) == 0 {
+		fmt.Printf("%s[-]%s Usage: autopwn-agents <target> [--max-actions N] [--timeout M]\n", colorRed, colorReset)
+		fmt.Println("  Example: agents 192.168.1.1")
+		fmt.Println("  Example: agents 127.0.0.1 --max-actions 15")
+		fmt.Println("\nMulti-agent mode runs specialized agents in parallel:")
+		fmt.Println("  - Recon Agent: Port scanning, service discovery")
+		fmt.Println("  - Web Agent: Web vulnerabilities (SQLi, XSS, etc)")
+		fmt.Println("  - Auth Agent: SSH, FTP, Redis, MongoDB")
+		fmt.Println("  - RPC Agent: XML-RPC, JSON-RPC, gRPC")
+		fmt.Println("  - SSL Agent: TLS/SSL security")
+		fmt.Println("  - Post-Exploit Agent: Credential spray, hash cracking")
+		return
+	}
+
+	target := args[0]
+	maxActions := 15
+	timeout := 10 * time.Minute
+
+	for i := 1; i < len(args); i++ {
+		if args[i] == "--max-actions" && i+1 < len(args) {
+			maxActions, _ = strconv.Atoi(args[i+1])
+			i++
+		}
+		if args[i] == "--timeout" && i+1 < len(args) {
+			mins, _ := strconv.Atoi(args[i+1])
+			timeout = time.Duration(mins) * time.Minute
+			i++
+		}
+	}
+
+	fmt.Printf("\n%s%s╔══════════════════════════════════════════════════════════════╗%s\n", colorBold, colorCyan, colorReset)
+	fmt.Printf("%s%s║        MULTI-AGENT PARALLEL PENETRATION TEST                 ║%s\n", colorBold, colorCyan, colorReset)
+	fmt.Printf("%s%s╚══════════════════════════════════════════════════════════════╝%s\n\n", colorBold, colorCyan, colorReset)
+
+	fmt.Printf("%s[*]%s Target: %s\n", colorBlue, colorReset, target)
+	fmt.Printf("%s[*]%s Max Actions per Agent: %d\n", colorBlue, colorReset, maxActions)
+	fmt.Printf("%s[*]%s Timeout: %v\n", colorBlue, colorReset, timeout)
+	fmt.Printf("%s[*]%s Parallel agents will coordinate their efforts.\n\n", colorBlue, colorReset)
+
+	// Create coordinator
+	coordinator := ai.NewCoordinator(target, c.framework, c.ai)
+	coordinator.SetMaxActionsPerAgent(maxActions)
+	coordinator.SetTimeout(timeout)
+
+	// Set up callbacks for progress reporting
+	coordinator.SetCallbacks(ai.AgentCallbacks{
+		OnAction: func(agent string, action, target string) {
+			agentColor := colorCyan
+			switch agent {
+			case "recon":
+				agentColor = colorBlue
+			case "web":
+				agentColor = colorYellow
+			case "auth":
+				agentColor = colorMagenta
+			case "rpc":
+				agentColor = colorGreen
+			case "ssl":
+				agentColor = colorRed
+			case "post_exploit":
+				agentColor = colorCyan
+			case "coordinator":
+				agentColor = colorBold + colorCyan
+			}
+			fmt.Printf("%s[%s]%s %s -> %s\n", agentColor, strings.ToUpper(agent), colorReset, action, target)
+		},
+		OnFinding: func(agent string, finding ai.Finding) {
+			severity := colorYellow
+			if finding.Severity == "critical" {
+				severity = colorRed + colorBold
+			} else if finding.Severity == "high" {
+				severity = colorRed
+			}
+			fmt.Printf("%s[VULN]%s %s%s%s: %s\n", colorRed, colorReset, severity, finding.Type, colorReset, finding.Description)
+		},
+		OnCredential: func(agent string, cred ai.Credential) {
+			fmt.Printf("%s[CRED]%s %s:%s @ %s\n", colorGreen+colorBold, colorReset, cred.Username, cred.Password, cred.Service)
+		},
+		OnComplete: func(agent string, actions int, findings int) {
+			if agent == "coordinator" {
+				fmt.Printf("\n%s[DONE]%s Total actions: %d, Total findings: %d\n", colorGreen+colorBold, colorReset, actions, findings)
+			}
+		},
+		OnError: func(agent string, err error) {
+			fmt.Printf("%s[ERR]%s %s: %v\n", colorRed, colorReset, agent, err)
+		},
+	})
+
+	// Run the multi-agent pentest
+	ctx := context.Background()
+	if err := coordinator.Run(ctx); err != nil {
+		fmt.Printf("%s[-]%s Multi-agent pentest failed: %v\n", colorRed, colorReset, err)
+		return
+	}
+
+	// Get results
+	results := coordinator.GetResults()
+
+	fmt.Printf("\n%s%s═══════════════════ SUMMARY ═══════════════════%s\n", colorBold, colorCyan, colorReset)
+	fmt.Printf("Ports discovered: %d\n", len(results.OpenPorts))
+	fmt.Printf("Vulnerabilities: %d\n", len(results.Vulnerabilities))
+	fmt.Printf("Credentials: %d\n", len(results.Credentials))
+
+	// Show agent status
+	fmt.Printf("\n%sAgent Status:%s\n", colorBold, colorReset)
+	for name, status := range coordinator.GetState().GetAgentStatus() {
+		statusColor := colorGreen
+		if status.Status == "error" {
+			statusColor = colorRed
+		}
+		duration := status.EndTime.Sub(status.StartTime)
+		fmt.Printf("  %s: %s%s%s (%.1fs)\n", name, statusColor, status.Status, colorReset, duration.Seconds())
+	}
 }
