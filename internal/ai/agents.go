@@ -612,41 +612,149 @@ func (a *SSLAgent) Run(ctx context.Context) error {
 		}
 
 		target := fmt.Sprintf("%s:%d", a.state.Target, port)
-		actionKey := "ssl_scan:" + target
 
-		if a.state.IsActionDone(actionKey) {
-			continue
-		}
+		// Step 1: SSL vulnerability scan
+		a.sslScan(ctx, target, port)
 
-		a.reportAction("ssl_scan", target)
-		a.actions++
-
-		// Use runner's executeAction for actual SSL scanning
-		opts := map[string]interface{}{
-			"port": port,
-		}
-		result, err := a.executeAction(ctx, "ssl_scan", target, opts)
-		if err != nil {
-			a.state.MarkActionFailed(actionKey)
-			continue
-		}
-
-		a.state.MarkActionComplete(actionKey)
-
-		// Findings are processed in executeAction, but add summary if successful
-		if result != nil && result.Success && result.Result != "" {
-			a.reportFinding(Finding{
-				Type:        "ssl_vulnerabilities",
-				Severity:    "medium",
-				Target:      target,
-				Description: "SSL/TLS vulnerabilities found",
-				Evidence:    result.Result,
-				Timestamp:   time.Now(),
-			})
+		// Step 2: SSL traffic interception and key capture
+		if a.canContinue() {
+			a.sslIntercept(ctx, target, port)
 		}
 	}
 
 	return nil
+}
+
+// sslScan performs SSL/TLS vulnerability scanning
+func (a *SSLAgent) sslScan(ctx context.Context, target string, port int) {
+	actionKey := "ssl_scan:" + target
+
+	if a.state.IsActionDone(actionKey) {
+		return
+	}
+
+	a.reportAction("ssl_scan", target)
+	a.actions++
+
+	// Use runner's executeAction for actual SSL scanning
+	opts := map[string]interface{}{
+		"port": port,
+	}
+	result, err := a.executeAction(ctx, "ssl_scan", target, opts)
+	if err != nil {
+		a.state.MarkActionFailed(actionKey)
+		return
+	}
+
+	a.state.MarkActionComplete(actionKey)
+
+	// Findings are processed in executeAction, but add summary if successful
+	if result != nil && result.Success && result.Result != "" {
+		a.reportFinding(Finding{
+			Type:        "ssl_vulnerabilities",
+			Severity:    "medium",
+			Target:      target,
+			Description: "SSL/TLS vulnerabilities found",
+			Evidence:    result.Result,
+			Timestamp:   time.Now(),
+		})
+	}
+}
+
+// sslIntercept establishes persistent SSL connection for traffic interception
+func (a *SSLAgent) sslIntercept(ctx context.Context, target string, port int) {
+	actionKey := "ssl_intercept:" + target
+
+	if a.state.IsActionDone(actionKey) {
+		return
+	}
+
+	a.reportAction("ssl_intercept", target)
+	a.actions++
+
+	// Run SSL interceptor module
+	interceptor := exploit.NewSSLInterceptor()
+	interceptor.SetOption("RHOSTS", a.state.Target)
+	interceptor.SetOption("RPORT", fmt.Sprintf("%d", port))
+	interceptor.SetOption("KEYLOG_FILE", fmt.Sprintf("/tmp/sslkeys_%s_%d.log", a.state.Target, port))
+
+	result, err := interceptor.Run(ctx)
+	if err != nil {
+		a.state.MarkActionFailed(actionKey)
+		return
+	}
+
+	a.state.MarkActionComplete(actionKey)
+
+	if result != nil && result.Success {
+		// Report key extraction
+		evidence := result.Output
+		if keylogFile, ok := result.Data["keylog_file"].(string); ok {
+			evidence += fmt.Sprintf("\nSession keys saved to: %s", keylogFile)
+		}
+
+		a.reportFinding(Finding{
+			Type:        "ssl_intercept",
+			Severity:    "info",
+			Target:      target,
+			Description: "SSL/TLS session keys captured for traffic decryption",
+			Evidence:    evidence,
+			Timestamp:   time.Now(),
+		})
+
+		// Check for sensitive data in captured traffic
+		if hasCookies, ok := result.Data["has_cookies"].(bool); ok && hasCookies {
+			a.reportFinding(Finding{
+				Type:        "session_cookies",
+				Severity:    "high",
+				Target:      target,
+				Description: "Session cookies captured in SSL traffic",
+				Evidence:    "Set-Cookie headers found in intercepted response",
+				Timestamp:   time.Now(),
+			})
+		}
+
+		if hasAuth, ok := result.Data["has_auth_headers"].(bool); ok && hasAuth {
+			a.reportFinding(Finding{
+				Type:        "auth_headers",
+				Severity:    "critical",
+				Target:      target,
+				Description: "Authorization headers captured in SSL traffic",
+				Evidence:    "Bearer/Authorization tokens found in intercepted response",
+				Timestamp:   time.Now(),
+			})
+		}
+
+		if hasAPIKeys, ok := result.Data["has_api_keys"].(bool); ok && hasAPIKeys {
+			a.reportFinding(Finding{
+				Type:        "api_keys",
+				Severity:    "critical",
+				Target:      target,
+				Description: "API keys found in SSL traffic",
+				Evidence:    "api_key/apikey patterns found in intercepted response",
+				Timestamp:   time.Now(),
+			})
+		}
+
+		// Extract RSA key info if available
+		if rsaMod, ok := result.Data["rsa_modulus"].(string); ok {
+			a.reportFinding(Finding{
+				Type:        "rsa_key_extracted",
+				Severity:    "info",
+				Target:      target,
+				Description: "RSA public key extracted from certificate",
+				Evidence:    fmt.Sprintf("Modulus: %s...", rsaMod[:min(64, len(rsaMod))]),
+				Timestamp:   time.Now(),
+			})
+		}
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // =============================================================================
