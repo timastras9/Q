@@ -441,7 +441,8 @@ ACTIONS (grouped by priority):
 - ssh_pivot: After ssh_recon, discover internal networks via SSH! (target=ip:port) - finds hidden hosts!
 - pivot_scan: After ssh_pivot finds hosts, DEEP SCAN internal hosts! (target=ip) - finds internal services!
 - cred_spray: Try found creds on MySQL/PostgreSQL/FTP (target=ip) - HIGH PRIORITY when creds exist!
-- crack_hash: Crack any password hashes found
+- db_enum: After cred_spray succeeds on databases, ENUMERATE and extract password hashes! (target=ip)
+- crack_hash: After db_enum finds hashes, CRACK them! (target=hash) - reveals plaintext passwords!
 
 === COMPLETE (use sparingly!) ===
 - complete: ONLY after thoroughly testing - did you try ALL these ports?
@@ -512,7 +513,7 @@ Reply with JSON only:
 		"http_login": true, "redis_check": true, "cmd_inject": true,
 		"sqli_exploit": true, "complete": true, "full_scan": true,
 		"ssh_recon": true, "ssh_pivot": true, "pivot_scan": true, "reverse_shell": true, "cred_spray": true,
-		"lfi_exploit": true, "ssrf_exploit": true, "file_upload": true,
+		"db_enum": true, "lfi_exploit": true, "ssrf_exploit": true, "file_upload": true,
 		"nuclei_scan": true, "xss_scan": true, "nikto_scan": true,
 		"subdomain_enum": true, "ssl_scan": true, "api_fuzz": true,
 		"crack_hash": true, "mysql_check": true, "mongodb_check": true,
@@ -685,6 +686,44 @@ Reply with JSON only:
 				decision.Target = state.Target
 				decision.Reasoning = "Internal hosts discovered via pivot - deep scanning before completing"
 				decision.RiskLevel = "high"
+			}
+		}
+	}
+
+	// FORCE db_enum if AI tries to complete but we have database credentials
+	if decision.Action == "complete" {
+		dbEnumKey := "db_enum:" + state.Target
+		if !completedActions[dbEnumKey] && failedCounts[dbEnumKey] < 1 {
+			hasDBCreds := false
+			for _, cred := range state.Credentials {
+				if (cred.Service == "mysql" || cred.Service == "postgres") && cred.Username != "" && cred.Password != "" {
+					hasDBCreds = true
+					break
+				}
+			}
+			if hasDBCreds {
+				decision.Action = "db_enum"
+				decision.Target = state.Target
+				decision.Reasoning = "Database credentials found - enumerating to extract password hashes before completing"
+				decision.RiskLevel = "high"
+			}
+		}
+	}
+
+	// FORCE crack_hash if AI tries to complete but we have uncracked hashes
+	if decision.Action == "complete" {
+		for _, cred := range state.Credentials {
+			if cred.Hash != "" && cred.Password == "" {
+				// This is a hash that hasn't been cracked
+				crackKey := "crack_hash:" + cred.Hash
+				if !completedActions[crackKey] && failedCounts[crackKey] < 1 {
+					decision.Action = "crack_hash"
+					decision.Target = cred.Hash
+					decision.Options = map[string]interface{}{"username": cred.Username}
+					decision.Reasoning = fmt.Sprintf("Uncracked hash found for %s - attempting to crack before completing", cred.Username)
+					decision.RiskLevel = "high"
+					break
+				}
 			}
 		}
 	}

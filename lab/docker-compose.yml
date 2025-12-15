@@ -122,7 +122,7 @@ services:
   # TIER 3: DATABASE LAYER
   # ============================================
 
-  # MySQL (weak password, exposed)
+  # MySQL (weak password, exposed, with hash tables)
   mysql:
     image: mysql:8.0
     container_name: lab-mysql
@@ -131,10 +131,11 @@ services:
     environment:
       - MYSQL_ROOT_PASSWORD=root123
       - MYSQL_DATABASE=wordpress
-      - MYSQL_USER=wordpress
-      - MYSQL_PASSWORD=wordpress123
+      - MYSQL_USER=admin
+      - MYSQL_PASSWORD=admin123
     volumes:
       - mysql_data:/var/lib/mysql
+      - ./services/mysql-init:/docker-entrypoint-initdb.d
     restart: unless-stopped
 
   # MongoDB (no auth - common misconfiguration)
