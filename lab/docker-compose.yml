@@ -253,6 +253,89 @@ services:
     restart: unless-stopped
 
   # ============================================
+  # TIER 8: GUARANTEED SHELL ACCESS SERVICES
+  # ============================================
+
+  # Backdoor shell service - always provides root access
+  # This simulates a compromised service or malicious insider
+  backdoor-shell:
+    image: python:3.9-alpine
+    container_name: lab-backdoor
+    ports:
+      - "4444:4444"
+      - "31337:31337"
+    command: >
+      sh -c "apk add --no-cache socat busybox-extras netcat-openbsd &&
+             echo 'Backdoor service running...' &&
+             socat TCP-LISTEN:4444,reuseaddr,fork EXEC:/bin/sh,pty,stderr,setsid,sigint,sane &
+             nc -lvkp 31337 -e /bin/sh &
+             tail -f /dev/null"
+    restart: unless-stopped
+
+  # Redis with SSH key write capability (classic attack)
+  redis-ssh-pwn:
+    image: redis:7-alpine
+    container_name: lab-redis-ssh
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_ssh_data:/root/.ssh
+    command: >
+      sh -c "apk add --no-cache openssh-server &&
+             mkdir -p /root/.ssh && chmod 700 /root/.ssh &&
+             ssh-keygen -A &&
+             echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config &&
+             echo 'root:toor' | chpasswd &&
+             /usr/sbin/sshd &&
+             redis-server --protected-mode no --dir /root/.ssh --dbfilename authorized_keys"
+    restart: unless-stopped
+
+  # WebSocket reverse shell listener
+  ws-shell:
+    image: python:3.9-slim
+    container_name: lab-ws-shell
+    ports:
+      - "8888:8888"
+    command: >
+      sh -c "pip install websockets && python3 -c '
+import asyncio
+import websockets
+import subprocess
+import os
+
+async def shell(websocket, path):
+    print(f\"Connection from {websocket.remote_address}\")
+    await websocket.send(\"Connected to backdoor shell. Type commands:\")
+    async for message in websocket:
+        try:
+            result = subprocess.check_output(message, shell=True, stderr=subprocess.STDOUT, timeout=30)
+            await websocket.send(result.decode())
+        except subprocess.CalledProcessError as e:
+            await websocket.send(f\"Error: {e.output.decode()}\")
+        except Exception as e:
+            await websocket.send(f\"Error: {str(e)}\")
+
+async def main():
+    async with websockets.serve(shell, \"0.0.0.0\", 8888):
+        print(\"WebSocket shell listening on 8888\")
+        await asyncio.Future()
+
+asyncio.run(main())
+'"
+    restart: unless-stopped
+
+  # Vulnerable Netcat service (simulates old school backdoor)
+  netcat-backdoor:
+    image: alpine:3.18
+    container_name: lab-netcat
+    ports:
+      - "9999:9999"
+    command: >
+      sh -c "apk add --no-cache netcat-openbsd &&
+             while true; do nc -l -p 9999 -e /bin/sh 2>/dev/null; done"
+    restart: unless-stopped
+
+  # ============================================
   # TIER 6: SECURITY TRAINING - WIRELESS & CRACKING
   # ============================================
 
@@ -555,6 +638,7 @@ volumes:
   mysql_data:
   nfs_data:
   sunrpc_share:
+  redis_ssh_data:
 
 networks:
   default:
