@@ -417,13 +417,16 @@ BE CURIOUS! Check ports/services you haven't tested yet. Don't give up after a f
 
 ACTIONS (grouped by priority):
 
-=== PRIORITY 1: QUICK WINS (check first!) ===
-- redis_check: Redis no-auth (target=ip, port 6379) - often wide open!
-- mongodb_check: MongoDB no-auth (target=ip:27017) - data goldmine
-- mysql_check: MySQL default creds (target=ip:3306)
-- postgres_check: PostgreSQL default creds (target=ip:5432)
-- ftp_anon: FTP anonymous login (target=ip)
-- ssh_login: SSH brute force (target=ip:port) - try ALL SSH ports!
+=== PRIORITY 1: NO-AUTH DATABASE ACCESS (check FIRST - often misconfigured!) ===
+- redis_check: Redis no-auth (target=ip:6379) - CRITICAL! Often wide open, can lead to RCE!
+- mongodb_check: MongoDB no-auth (target=ip:27017) - CRITICAL! Data goldmine if no auth!
+- elasticsearch_check: Elasticsearch no-auth (target=ip:9200) - CRITICAL! Often exposed!
+NOTE: Do NOT try mysql_check or postgres_check yet - these require credentials!
+      Wait until you find creds via SSH, RPC, or web exploits, then use cred_spray!
+
+=== PRIORITY 1B: OTHER QUICK WINS ===
+- ftp_anon: FTP anonymous login (target=ip:21) - common misconfiguration
+- ssh_login: SSH brute force (target=ip:port) - try ALL SSH ports (22, 2222)!
 
 === PRIORITY 2: RPC SERVICES (often vulnerable!) ===
 - xmlrpc_exploit: XML-RPC RCE (target=ip:8086) - CRITICAL, often has system.execute!
@@ -443,17 +446,29 @@ ACTIONS (grouped by priority):
 - api_fuzz: API endpoint discovery (target=http://ip:port)
 - xss_scan: Cross-site scripting (target=http://ip:port)
 
-=== PRIORITY 4: SSL/SERVICE ENUM ===
-- ssl_connect: SSL traffic analysis (target=ip:443)
+=== PRIORITY 4: SSL/TLS SECURITY (test EVERY https port!) ===
+- ssl_scan: CRITICAL! Full SSL/TLS vulnerability scanner (target=ip:443) - checks:
+  * Weak TLS versions (TLS 1.0, 1.1) - VULNERABLE!
+  * Expired/expiring certificates - compliance issue!
+  * Self-signed certificates - MITM risk!
+  * Weak ciphers (RC4, 3DES, CBC) - VULNERABLE!
+  * Small key sizes (<2048 bits) - breakable!
+  * Certificate hostname mismatch - MITM risk!
+- ssl_connect: SSL traffic monitoring (target=ip:443) - use AFTER ssl_scan
 - service_scan: Banner grab (target=ip:port) - identify versions
 
-=== PRIORITY 5: POST-EXPLOITATION (after creds found) ===
+=== PRIORITY 5: POST-EXPLOITATION (ONLY after finding credentials!) ===
 - ssh_recon: MUST run after ssh_login success! (target=ip:port)
 - ssh_pivot: After ssh_recon, discover internal networks via SSH! (target=ip:port) - finds hidden hosts!
 - pivot_scan: After ssh_pivot finds hosts, DEEP SCAN internal hosts! (target=ip) - finds internal services!
-- cred_spray: Try found creds on MySQL/PostgreSQL/FTP (target=ip) - HIGH PRIORITY when creds exist!
+- cred_spray: CRITICAL! After finding ANY credentials, spray them on MySQL/PostgreSQL/FTP! (target=ip)
 - db_enum: After cred_spray succeeds on databases, ENUMERATE and extract password hashes! (target=ip)
 - crack_hash: After db_enum finds hashes, CRACK them! (target=hash) - reveals plaintext passwords!
+
+=== DATABASE CREDENTIAL TESTING (ONLY use after cred_spray or if you have found creds!) ===
+- mysql_check: MySQL credential test (target=ip:3306) - ONLY if you have creds to try!
+- postgres_check: PostgreSQL credential test (target=ip:5432) - ONLY if you have creds to try!
+DO NOT waste actions on mysql_check/postgres_check without credentials - use cred_spray instead!
 
 === COMPLETE (use sparingly!) ===
 - complete: ONLY after thoroughly testing - did you try ALL these ports?
@@ -471,6 +486,8 @@ RULES:
 5. Test ALL RPC ports - they're gold mines for RCE
 6. Don't complete early - explore MORE services first!
 7. After ANY credentials found -> run cred_spray to test password reuse on databases!
+8. DO NOT use mysql_check or postgres_check until you have found credentials! Use cred_spray instead.
+9. NO-AUTH checks (redis_check, mongodb_check) should be done BEFORE credential-based checks!
 
 Reply with JSON only:
 {"action":"x","target":"ip:port","reasoning":"why this specific target","risk_level":"low|med|high|critical"}`, statusStr, summary, exploitRecs, strings.Join(completedList, ", "))
@@ -555,7 +572,7 @@ Reply with JSON only:
 			{"jsonrpc_exploit", "8087"},
 			{"grpc_exploit", "50051"},
 			{"rpcbind_scan", "111"},
-			{"ssl_connect", "443"},
+			{"ssl_scan", "443"}, // Full SSL vulnerability scan - priority over ssl_connect
 		}
 
 		// Find untested critical services
@@ -637,6 +654,58 @@ Reply with JSON only:
 					decision.Reasoning = "SSH login succeeded - running post-exploitation recon before completing"
 					decision.RiskLevel = "high"
 					break
+				}
+			}
+		}
+	}
+
+	// BLOCK mysql_check and postgres_check if no credentials found yet - waste of actions!
+	if decision.Action == "mysql_check" || decision.Action == "postgres_check" {
+		hasUsableCreds := false
+		for _, cred := range state.Credentials {
+			if cred.Username != "" && cred.Password != "" {
+				hasUsableCreds = true
+				break
+			}
+		}
+		if !hasUsableCreds {
+			// No credentials found yet - redirect to something more useful
+			// Try SSH login first, or RPC exploits
+			for _, port := range state.OpenPorts {
+				if port.Port == 2222 || port.Port == 22 {
+					sshKey := "ssh_login:" + fmt.Sprintf("%s:%d", state.Target, port.Port)
+					if !completedActions[sshKey] && failedCounts[sshKey] < 1 {
+						decision.Action = "ssh_login"
+						decision.Target = fmt.Sprintf("%s:%d", state.Target, port.Port)
+						decision.Reasoning = "Redirected from database check - no credentials yet. Try SSH first to get creds!"
+						decision.RiskLevel = "high"
+						break
+					}
+				}
+			}
+			// If SSH already tried, try RPC exploits
+			if decision.Action == "mysql_check" || decision.Action == "postgres_check" {
+				rpcPorts := []struct{ action string; port int }{
+					{"xmlrpc_exploit", 8086},
+					{"jsonrpc_exploit", 8087},
+					{"grpc_exploit", 50051},
+				}
+				for _, rpc := range rpcPorts {
+					for _, port := range state.OpenPorts {
+						if port.Port == rpc.port {
+							key := rpc.action + ":" + fmt.Sprintf("%s:%d", state.Target, rpc.port)
+							if !completedActions[key] && failedCounts[key] < 1 {
+								decision.Action = rpc.action
+								decision.Target = fmt.Sprintf("%s:%d", state.Target, rpc.port)
+								decision.Reasoning = "Redirected from database check - no credentials yet. Try RPC exploit first!"
+								decision.RiskLevel = "critical"
+								break
+							}
+						}
+					}
+					if decision.Action != "mysql_check" && decision.Action != "postgres_check" {
+						break
+					}
 				}
 			}
 		}
@@ -755,6 +824,7 @@ Reply with JSON only:
 		"cmd_inject":     80,
 		"sqli":           80,
 		"dir_bruteforce": 80,
+		"ssl_scan":       443,
 		"ssl_connect":    443,
 		"rmi_exploit":    1099,
 		"rpcbind_scan":   111,
