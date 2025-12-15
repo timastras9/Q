@@ -247,13 +247,24 @@ func (a *AutoPentester) compactState(state *PentestState) string {
 		parts = append(parts, fmt.Sprintf("Vulns:%s", strings.Join(vc, ",")))
 	}
 
-	// Credentials found
+	// Credentials found - separate regular creds from hashes
 	if len(state.Credentials) > 0 {
 		var creds []string
+		var hashes []string
 		for _, c := range state.Credentials {
-			creds = append(creds, fmt.Sprintf("%s@%s", c.Username, c.Service))
+			if c.Hash != "" && c.Password == "" {
+				// This is an uncracked hash - show hash value for crack_hash action
+				hashes = append(hashes, fmt.Sprintf("%s=%s", c.Username, c.Hash))
+			} else if c.Username != "" || c.Password != "" {
+				creds = append(creds, fmt.Sprintf("%s@%s", c.Username, c.Service))
+			}
 		}
-		parts = append(parts, fmt.Sprintf("Creds:%s", strings.Join(creds, ",")))
+		if len(creds) > 0 {
+			parts = append(parts, fmt.Sprintf("Creds:%s", strings.Join(creds, ",")))
+		}
+		if len(hashes) > 0 {
+			parts = append(parts, fmt.Sprintf("Hashes(crack_hash target=hash):%s", strings.Join(hashes, ",")))
+		}
 	}
 
 	// Last 3 actions only
@@ -601,7 +612,7 @@ Reply with JSON only:
 		}
 	}
 
-	// Check if this action has failed too many times (max 2 attempts)
+	// Check if this action has failed or succeeded - prevent repeats
 	decisionBaseTarget := normalizeTarget(decision.Target)
 	decisionKey := decision.Action + ":" + decisionBaseTarget
 
@@ -609,8 +620,8 @@ Reply with JSON only:
 	if successCounts[decisionKey] >= 1 && decision.Action != "complete" {
 		// This action already succeeded, find something else to do
 		decision = a.findAlternativeAction(state, &decision, completedActions, failedCounts, successCounts)
-	} else if failedCounts[decisionKey] >= 2 {
-		// This action has failed twice, find something else
+	} else if failedCounts[decisionKey] >= 1 {
+		// This action has already failed once, find something else (reduced from 2 to 1)
 		decision = a.findAlternativeAction(state, &decision, completedActions, failedCounts, successCounts)
 	}
 
@@ -710,8 +721,17 @@ Reply with JSON only:
 		}
 	}
 
-	// FORCE crack_hash if AI tries to complete but we have uncracked hashes
-	if decision.Action == "complete" {
+	// FORCE crack_hash if we have uncracked hashes (not just on complete - also when AI tries other actions)
+	// This kicks in right after db_enum extracts hashes
+	hasUncrackedHashes := false
+	for _, cred := range state.Credentials {
+		if cred.Hash != "" && cred.Password == "" {
+			hasUncrackedHashes = true
+			break
+		}
+	}
+
+	if hasUncrackedHashes && decision.Action != "crack_hash" {
 		for _, cred := range state.Credentials {
 			if cred.Hash != "" && cred.Password == "" {
 				// This is a hash that hasn't been cracked
@@ -720,11 +740,49 @@ Reply with JSON only:
 					decision.Action = "crack_hash"
 					decision.Target = cred.Hash
 					decision.Options = map[string]interface{}{"username": cred.Username}
-					decision.Reasoning = fmt.Sprintf("Uncracked hash found for %s - attempting to crack before completing", cred.Username)
+					decision.Reasoning = fmt.Sprintf("Uncracked hash found for %s - cracking immediately", cred.Username)
 					decision.RiskLevel = "high"
 					break
 				}
 			}
+		}
+	}
+
+	// PORT FILTERING: Prevent trying to scan/exploit ports that aren't open
+	portBasedActions := map[string]int{
+		"web_scan":       80,
+		"lfi_exploit":    80,
+		"cmd_inject":     80,
+		"sqli":           80,
+		"dir_bruteforce": 80,
+		"ssl_connect":    443,
+		"rmi_exploit":    1099,
+		"rpcbind_scan":   111,
+		"nfs_exploit":    2049,
+	}
+
+	if port, ok := portBasedActions[decision.Action]; ok {
+		// Check if this port is actually open
+		portOpen := false
+		for _, p := range state.OpenPorts {
+			if p.Port == port {
+				portOpen = true
+				break
+			}
+		}
+		// Also check for 8080 for web actions
+		if !portOpen && (decision.Action == "web_scan" || decision.Action == "lfi_exploit" ||
+			decision.Action == "cmd_inject" || decision.Action == "sqli" || decision.Action == "dir_bruteforce") {
+			for _, p := range state.OpenPorts {
+				if p.Port == 8080 || p.Port == 3000 || p.Port == 8081 || p.Port == 8082 {
+					portOpen = true
+					break
+				}
+			}
+		}
+		if !portOpen && decision.Action != "complete" {
+			// Port is not open, find an alternative action
+			decision = a.findAlternativeAction(state, &decision, completedActions, failedCounts, successCounts)
 		}
 	}
 
