@@ -22,3 +22,5 @@ Thumbs.db
 # Test output - scans and reports go in output/
 output/
 *.log
+wordlists/rockyou.txt
+wordlists/*.txt
