@@ -601,9 +601,24 @@ func (a *SSLAgent) Run(ctx context.Context) error {
 
 	sslPorts := []int{}
 	for _, p := range ports {
-		if p.Port == 443 || p.Port == 8443 {
+		// Check all common HTTPS ports
+		switch p.Port {
+		case 443, 8443, 9443, 4443, 8080, 3000:
+			// For 8080 and 3000, try SSL anyway - might be HTTPS
 			sslPorts = append(sslPorts, p.Port)
 		}
+	}
+
+	// Also specifically check 8443 even if not in port list (common HTTPS port)
+	has8443 := false
+	for _, p := range sslPorts {
+		if p == 8443 {
+			has8443 = true
+			break
+		}
+	}
+	if !has8443 {
+		sslPorts = append(sslPorts, 8443)
 	}
 
 	for _, port := range sslPorts {
@@ -691,6 +706,11 @@ func (a *SSLAgent) sslIntercept(ctx context.Context, target string, port int) {
 		evidence := result.Output
 		if keylogFile, ok := result.Data["keylog_file"].(string); ok {
 			evidence += fmt.Sprintf("\nSession keys saved to: %s", keylogFile)
+		}
+
+		// Print verbose decrypted traffic directly to console
+		if result.Output != "" {
+			fmt.Printf("\n%s", result.Output)
 		}
 
 		a.reportFinding(Finding{

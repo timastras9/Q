@@ -1,6 +1,7 @@
 # Binaries
 pentestai
 pentestai-linux
+stripe-checkout-linux
 *.exe
 
 # Environment files with secrets

@@ -322,3 +322,59 @@ func (c *ClaudeClient) Chat(ctx context.Context, messages []Message) (string, er
 
 	return claudeResp.Content[0].Text, nil
 }
+
+// ChatLong is like Chat but with higher token limit for code generation
+func (c *ClaudeClient) ChatLong(ctx context.Context, messages []Message) (string, error) {
+	c.rateLimit()
+	req := ClaudeRequest{
+		Model:     c.model,
+		MaxTokens: 4096, // Higher limit for full code generation
+		System:    "You are a security remediation expert. Generate complete, secure replacement code.",
+		Messages:  messages,
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL, bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-api-key", c.apiKey)
+	httpReq.Header.Set("anthropic-version", "2023-06-01")
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var claudeResp ClaudeResponse
+	if err := json.Unmarshal(respBody, &claudeResp); err != nil {
+		return "", fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	// Track token usage
+	c.TotalInput += claudeResp.Usage.InputTokens
+	c.TotalOutput += claudeResp.Usage.OutputTokens
+	c.RequestCount++
+
+	if len(claudeResp.Content) == 0 {
+		return "", fmt.Errorf("empty response from Claude")
+	}
+
+	return claudeResp.Content[0].Text, nil
+}

@@ -165,6 +165,8 @@ func (c *Console) execute(line string) {
 		c.cmdScan(args)
 	case "webscan":
 		c.cmdWebScan(args)
+	case "sslsniff":
+		c.cmdSSLSniff(args)
 	case "ai":
 		c.cmdAI(args)
 	case "analyze":
@@ -227,6 +229,7 @@ Scanning Commands
     scan -sV <target>       Scan with service detection
     scan -p <ports> <host>  Scan specific ports
     webscan <url>           Run web vulnerability scan
+    sslsniff <target>       Intercept SSL/TLS traffic
 
 AI Commands
 ===========
@@ -633,6 +636,152 @@ func (c *Console) cmdWebScan(args []string) {
 	}
 
 	fmt.Print(result.FormatResult())
+}
+
+func (c *Console) cmdSSLSniff(args []string) {
+	if len(args) == 0 {
+		fmt.Printf("%s[-]%s Usage: sslsniff <target> [options]\n", colorRed, colorReset)
+		fmt.Println("  Options:")
+		fmt.Println("    -p <port>           Target port (default: 443)")
+		fmt.Println("    -d <duration>       Capture duration in seconds (default: 30)")
+		fmt.Println("    -o <file>           Output keylog file for Wireshark")
+		fmt.Println("    --sni <name>        Server Name Indication (SNI) for TLS")
+		fmt.Println("    --detect-sensitive  Scan for PII, credentials, API keys")
+		fmt.Println()
+		fmt.Println("  Examples:")
+		fmt.Println("    sslsniff example.com")
+		fmt.Println("    sslsniff 192.168.1.1 -p 8443")
+		fmt.Println("    sslsniff example.com --sni www.example.com")
+		fmt.Println("    sslsniff example.com --detect-sensitive")
+		fmt.Println("    sslsniff example.com -d 60 -o /tmp/sslkeys.log --detect-sensitive")
+		return
+	}
+
+	target := args[0]
+	port := 443
+	duration := 30
+	outputFile := ""
+	sni := ""
+	detectSensitive := false
+
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "-p":
+			if i+1 < len(args) {
+				port, _ = strconv.Atoi(args[i+1])
+				i++
+			}
+		case "-d":
+			if i+1 < len(args) {
+				duration, _ = strconv.Atoi(args[i+1])
+				i++
+			}
+		case "-o":
+			if i+1 < len(args) {
+				outputFile = args[i+1]
+				i++
+			}
+		case "--sni":
+			if i+1 < len(args) {
+				sni = args[i+1]
+				i++
+			}
+		case "--detect-sensitive", "-s":
+			detectSensitive = true
+		}
+	}
+
+	// If no SNI specified, use target as SNI (for proper TLS handshake)
+	if sni == "" {
+		sni = target
+	}
+
+	fmt.Printf("\n%s%s╔══════════════════════════════════════════════════════════════╗%s\n", colorBold, colorCyan, colorReset)
+	fmt.Printf("%s%s║                  SSL/TLS TRAFFIC SNIFFER                      ║%s\n", colorBold, colorCyan, colorReset)
+	fmt.Printf("%s%s╚══════════════════════════════════════════════════════════════╝%s\n\n", colorBold, colorCyan, colorReset)
+
+	fmt.Printf("%s[*]%s Target: %s:%d\n", colorBlue, colorReset, target, port)
+	fmt.Printf("%s[*]%s SNI: %s\n", colorBlue, colorReset, sni)
+	fmt.Printf("%s[*]%s Duration: %d seconds\n", colorBlue, colorReset, duration)
+	if outputFile != "" {
+		fmt.Printf("%s[*]%s Keylog file: %s\n", colorBlue, colorReset, outputFile)
+	}
+	if detectSensitive {
+		fmt.Printf("%s[*]%s Sensitive data detection: %sENABLED%s\n", colorBlue, colorReset, colorGreen, colorReset)
+	}
+	fmt.Println()
+
+	// Use the SSL interceptor module
+	if err := c.framework.Use("auxiliary/sniffer/ssl_interceptor"); err != nil {
+		// Try the other registered name
+		if err := c.framework.Use("auxiliary/scanner/ssl/ssl_sniffer"); err != nil {
+			fmt.Printf("%s[-]%s SSL sniffer module not available: %v\n", colorRed, colorReset, err)
+			return
+		}
+	}
+
+	module := c.framework.Current()
+	module.SetOption("RHOSTS", target)
+	module.SetOption("RPORT", strconv.Itoa(port))
+	module.SetOption("DURATION", strconv.Itoa(duration))
+	module.SetOption("SNI", sni)
+	if outputFile != "" {
+		module.SetOption("KEYLOG_FILE", outputFile)
+	}
+	if detectSensitive {
+		module.SetOption("DETECT_SENSITIVE", "true")
+	}
+
+	fmt.Printf("%s[*]%s Starting SSL interception...\n", colorBlue, colorReset)
+	fmt.Printf("%s[*]%s Press Ctrl+C to stop early\n\n", colorBlue, colorReset)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(duration+10)*time.Second)
+	defer cancel()
+
+	// Handle interrupt
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT)
+	go func() {
+		<-sigChan
+		fmt.Printf("\n%s[!]%s Stopping capture...\n", colorYellow, colorReset)
+		cancel()
+	}()
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		fmt.Printf("%s[-]%s SSL interception failed: %v\n", colorRed, colorReset, err)
+		return
+	}
+
+	// Display results
+	fmt.Printf("\n%s%s═══════════════════ RESULTS ═══════════════════%s\n", colorBold, colorCyan, colorReset)
+
+	if result.Success {
+		fmt.Printf("%s[+]%s SSL traffic captured successfully\n", colorGreen, colorReset)
+	} else {
+		fmt.Printf("%s[-]%s Capture completed (no traffic intercepted)\n", colorYellow, colorReset)
+	}
+
+	if result.Output != "" {
+		// Truncate if too long for display
+		output := result.Output
+		if len(output) > 5000 {
+			output = output[:5000] + "\n\n... [truncated - full output in keylog file] ..."
+		}
+		fmt.Printf("\n%sDecrypted Traffic:%s\n", colorBold, colorReset)
+		fmt.Println(output)
+	}
+
+	// Show keylog file location
+	if outputFile != "" {
+		fmt.Printf("\n%s[*]%s TLS session keys saved to: %s\n", colorBlue, colorReset, outputFile)
+		fmt.Printf("%s[*]%s To decrypt in Wireshark:\n", colorBlue, colorReset)
+		fmt.Println("     1. Edit > Preferences > Protocols > TLS")
+		fmt.Println("     2. Set (Pre)-Master-Secret log filename to:", outputFile)
+		fmt.Println("     3. Load your PCAP capture file")
+	}
+
+	fmt.Println()
 }
 
 func (c *Console) cmdAI(args []string) {
@@ -1129,6 +1278,66 @@ func (c *Console) saveReportJSON(filename string) {
 	}
 }
 
+// saveAgentsReportJSON saves multi-agent scan results to JSON for PDF generation
+func (c *Console) saveAgentsReportJSON(filename string, state *ai.ScanState) error {
+	data := ReportData{
+		Target:          state.Target,
+		Date:            time.Now().Format("2006-01-02"),
+		Tests:           make([]TestResult, 0),
+		Vulnerabilities: make([]VulnEntry, 0),
+		Credentials:     make([]CredEntry, 0),
+	}
+
+	// Convert action history to test results
+	for _, action := range state.ActionHistory {
+		data.Tests = append(data.Tests, TestResult{
+			Name:    action.Type,
+			Action:  action.Type,
+			Target:  action.Target,
+			Success: action.Success,
+			Output:  action.Result,
+		})
+	}
+
+	// Convert vulnerabilities
+	for _, vuln := range state.Vulnerabilities {
+		data.Vulnerabilities = append(data.Vulnerabilities, VulnEntry{
+			Type:        vuln.Type,
+			Severity:    vuln.Severity,
+			Target:      vuln.Target,
+			Service:     vuln.Service,
+			Description: vuln.Description,
+			Evidence:    vuln.Evidence,
+			Remediation: vuln.Remediation,
+		})
+	}
+
+	// Convert credentials
+	for _, cred := range state.Credentials {
+		credType := "password"
+		if cred.Hash != "" {
+			credType = "hash"
+		}
+		data.Credentials = append(data.Credentials, CredEntry{
+			Username: cred.Username,
+			Password: cred.Password,
+			Type:     credType,
+			Source:   cred.Service,
+		})
+	}
+
+	jsonData, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal JSON: %w", err)
+	}
+
+	if err := os.WriteFile(filename, jsonData, 0644); err != nil {
+		return fmt.Errorf("failed to save JSON: %w", err)
+	}
+
+	return nil
+}
+
 func (c *Console) generatePDF(inputFile, outputFile string) {
 	// Check if node and the report generator exist
 	scriptPath := "report/generate-report.js"
@@ -1460,17 +1669,21 @@ func parsePorts(s string) []int {
 // cmdAutoFix generates remediation fixes for vulnerabilities found in a scan
 func (c *Console) cmdAutoFix(args []string) {
 	if len(args) == 0 {
-		fmt.Printf("%s[-]%s Usage: autofix [--safe|--review|--apply-lab] <scan_result.json>\n", colorRed, colorReset)
+		fmt.Printf("%s[-]%s Usage: autofix [--safe|--review|--apply-lab|--ai] <scan_result.json>\n", colorRed, colorReset)
 		fmt.Println("  --safe      : Auto-apply safe fixes (security headers, configs)")
 		fmt.Println("  --review    : Generate all patches for human review (default)")
-		fmt.Println("  --apply-lab : Actually patch and rebuild the lab Docker containers")
-		fmt.Println("\nExample: autofix --apply-lab output/scans/pentest_127_0_0_1_20251213.json")
+		fmt.Println("  --apply-lab : Patch lab containers using pre-defined secure versions")
+		fmt.Println("  --ai        : AI-driven dynamic fixing (analyzes code and generates fixes)")
+		fmt.Println("\nExamples:")
+		fmt.Println("  autofix --apply-lab output/scans/agents_127_0_0_1_*.json")
+		fmt.Println("  autofix --ai output/scans/agents_127_0_0_1_*.json")
 		return
 	}
 
 	// Parse arguments
 	mode := remediation.FixModeReview // Default to review mode (safe)
 	applyLab := false
+	aiMode := false
 	var scanFile string
 
 	for _, arg := range args {
@@ -1482,6 +1695,8 @@ func (c *Console) cmdAutoFix(args []string) {
 		case "--apply-lab":
 			applyLab = true
 			mode = remediation.FixModeSafe
+		case "--ai":
+			aiMode = true
 		default:
 			if !strings.HasPrefix(arg, "-") {
 				scanFile = arg
@@ -1493,10 +1708,21 @@ func (c *Console) cmdAutoFix(args []string) {
 	if applyLab {
 		if scanFile == "" {
 			fmt.Printf("%s[-]%s --apply-lab requires a scan file\n", colorRed, colorReset)
-			fmt.Println("Example: autofix --apply-lab output/scans/pentest_127_0_0_1_*.json")
+			fmt.Println("Example: autofix --apply-lab output/scans/agents_127_0_0_1_*.json")
 			return
 		}
 		c.applyLabFixes(scanFile)
+		return
+	}
+
+	// If --ai mode, use AI-driven dynamic fixing
+	if aiMode {
+		if scanFile == "" {
+			fmt.Printf("%s[-]%s --ai requires a scan file\n", colorRed, colorReset)
+			fmt.Println("Example: autofix --ai output/scans/agents_127_0_0_1_*.json")
+			return
+		}
+		c.applyAIFixes(scanFile)
 		return
 	}
 
@@ -1613,17 +1839,33 @@ func (c *Console) cmdAutoFix(args []string) {
 
 // labFixMapping maps vulnerability types to lab service fixes
 var labFixMapping = map[string]struct {
-	service     string // Docker service name
-	vulnFile    string // Vulnerable file path
-	secureFile  string // Secure file path
-	description string
+	service       string // Docker service name
+	vulnFile      string // Vulnerable file path in container
+	secureFile    string // Secure file path (local)
+	containerPath string // Path inside container
+	description   string
 }{
-	"rpc_command_injection":  {"xmlrpc", "lab/services/xmlrpc/server.py", "lab/services/xmlrpc/server_secure.py", "XML-RPC command injection"},
-	"xmlrpc":                 {"xmlrpc", "lab/services/xmlrpc/server.py", "lab/services/xmlrpc/server_secure.py", "XML-RPC vulnerability"},
-	"grpc_command_injection": {"grpc-server", "lab/services/grpc/server.py", "lab/services/grpc/server_secure.py", "gRPC command injection"},
-	"grpc":                   {"grpc-server", "lab/services/grpc/server.py", "lab/services/grpc/server_secure.py", "gRPC vulnerability"},
-	"rpc_info_disclosure":    {"jsonrpc", "lab/services/jsonrpc/server.py", "lab/services/jsonrpc/server_secure.py", "JSON-RPC info disclosure"},
-	"jsonrpc":                {"jsonrpc", "lab/services/jsonrpc/server.py", "lab/services/jsonrpc/server_secure.py", "JSON-RPC vulnerability"},
+	// XML-RPC vulnerabilities
+	"rpc_command_injection": {"vuln-lab", "apps/xmlrpc-server/server.py", "lab/vuln-lab-image/apps/xmlrpc-server/server_secure.py", "/app/xmlrpc/server.py", "XML-RPC command injection"},
+	"xmlrpc":                {"vuln-lab", "apps/xmlrpc-server/server.py", "lab/vuln-lab-image/apps/xmlrpc-server/server_secure.py", "/app/xmlrpc/server.py", "XML-RPC vulnerability"},
+	"xml-rpc":               {"vuln-lab", "apps/xmlrpc-server/server.py", "lab/vuln-lab-image/apps/xmlrpc-server/server_secure.py", "/app/xmlrpc/server.py", "XML-RPC vulnerability"},
+
+	// gRPC vulnerabilities
+	"grpc_command_injection": {"vuln-lab", "apps/grpc-server/server.py", "lab/vuln-lab-image/apps/grpc-server/server_secure.py", "/app/grpc/server.py", "gRPC command injection"},
+	"grpc":                   {"vuln-lab", "apps/grpc-server/server.py", "lab/vuln-lab-image/apps/grpc-server/server_secure.py", "/app/grpc/server.py", "gRPC vulnerability"},
+
+	// JSON-RPC vulnerabilities
+	"rpc_info_disclosure": {"vuln-lab", "apps/jsonrpc-server/server.js", "lab/vuln-lab-image/apps/jsonrpc-server/server_secure.js", "/app/jsonrpc/server.js", "JSON-RPC info disclosure"},
+	"jsonrpc":             {"vuln-lab", "apps/jsonrpc-server/server.js", "lab/vuln-lab-image/apps/jsonrpc-server/server_secure.js", "/app/jsonrpc/server.js", "JSON-RPC vulnerability"},
+	"json-rpc":            {"vuln-lab", "apps/jsonrpc-server/server.js", "lab/vuln-lab-image/apps/jsonrpc-server/server_secure.js", "/app/jsonrpc/server.js", "JSON-RPC vulnerability"},
+
+	// Flask vulnerabilities
+	"command_injection":         {"vuln-lab", "apps/vuln-flask/app.py", "lab/vuln-lab-image/apps/vuln-flask/app_secure.py", "/app/flask/app.py", "Flask command injection"},
+	"ssti":                      {"vuln-lab", "apps/vuln-flask/app.py", "lab/vuln-lab-image/apps/vuln-flask/app_secure.py", "/app/flask/app.py", "Flask SSTI"},
+	"insecure_deserialization":  {"vuln-lab", "apps/vuln-flask/app.py", "lab/vuln-lab-image/apps/vuln-flask/app_secure.py", "/app/flask/app.py", "Flask insecure deserialization"},
+	"ssrf":                      {"vuln-lab", "apps/vuln-flask/app.py", "lab/vuln-lab-image/apps/vuln-flask/app_secure.py", "/app/flask/app.py", "Flask SSRF"},
+	"flask":                     {"vuln-lab", "apps/vuln-flask/app.py", "lab/vuln-lab-image/apps/vuln-flask/app_secure.py", "/app/flask/app.py", "Flask vulnerability"},
+	"information_disclosure":    {"vuln-lab", "apps/vuln-flask/app.py", "lab/vuln-lab-image/apps/vuln-flask/app_secure.py", "/app/flask/app.py", "Information disclosure"},
 }
 
 // applyLabFixes patches the lab Docker containers based on vulnerabilities found
@@ -1656,9 +1898,14 @@ func (c *Console) applyLabFixes(scanFile string) {
 
 	fmt.Printf("%s[*]%s Loaded %d vulnerabilities from %s\n", colorBlue, colorReset, len(scanResult.Vulnerabilities), scanFile)
 
-	// Track which services need to be patched and rebuilt
-	servicesToRebuild := make(map[string]bool)
+	// Track which services need to be patched and containers to update
 	patchedFiles := make(map[string]bool)
+	containerPatches := []struct {
+		secureFile    string
+		containerPath string
+		description   string
+		severity      string
+	}{}
 
 	for _, vuln := range scanResult.Vulnerabilities {
 		// Check if we have a fix for this vulnerability type
@@ -1672,7 +1919,8 @@ func (c *Console) applyLabFixes(scanFile string) {
 		if !exists {
 			// Try partial match on type
 			for key, f := range labFixMapping {
-				if strings.Contains(vuln.Type, key) || strings.Contains(key, vuln.Type) {
+				if strings.Contains(strings.ToLower(vuln.Type), strings.ToLower(key)) ||
+					strings.Contains(strings.ToLower(key), strings.ToLower(vuln.Type)) {
 					fix = f
 					exists = true
 					break
@@ -1685,76 +1933,78 @@ func (c *Console) applyLabFixes(scanFile string) {
 		}
 
 		// Skip if already patched this file
-		if patchedFiles[fix.vulnFile] {
+		if patchedFiles[fix.containerPath] {
 			continue
 		}
 
 		// Check if secure version exists
 		if _, err := os.Stat(fix.secureFile); os.IsNotExist(err) {
-			fmt.Printf("%s[!]%s No secure version for %s\n", colorYellow, colorReset, fix.description)
+			fmt.Printf("%s[!]%s No secure version for %s at %s\n", colorYellow, colorReset, fix.description, fix.secureFile)
 			continue
 		}
 
-		// Backup original if not already backed up
-		backupPath := fix.vulnFile + ".vuln"
-		if _, err := os.Stat(backupPath); os.IsNotExist(err) {
-			origData, err := os.ReadFile(fix.vulnFile)
-			if err != nil {
-				fmt.Printf("%s[-]%s Failed to read %s: %v\n", colorRed, colorReset, fix.vulnFile, err)
-				continue
-			}
-			if err := os.WriteFile(backupPath, origData, 0644); err != nil {
-				fmt.Printf("%s[-]%s Failed to backup %s: %v\n", colorRed, colorReset, fix.vulnFile, err)
-				continue
-			}
-			fmt.Printf("%s[*]%s Backed up: %s\n", colorBlue, colorReset, fix.vulnFile)
-		}
-
-		// Apply the fix
-		secureData, err := os.ReadFile(fix.secureFile)
-		if err != nil {
-			fmt.Printf("%s[-]%s Failed to read secure file: %v\n", colorRed, colorReset, err)
-			continue
-		}
-		if err := os.WriteFile(fix.vulnFile, secureData, 0644); err != nil {
-			fmt.Printf("%s[-]%s Failed to apply fix: %v\n", colorRed, colorReset, err)
-			continue
-		}
-
-		fmt.Printf("%s[+]%s %sPATCHED%s: %s (%s)\n", colorGreen, colorReset, colorGreen, colorReset, fix.description, vuln.Severity)
-		patchedFiles[fix.vulnFile] = true
-		servicesToRebuild[fix.service] = true
+		containerPatches = append(containerPatches, struct {
+			secureFile    string
+			containerPath string
+			description   string
+			severity      string
+		}{fix.secureFile, fix.containerPath, fix.description, vuln.Severity})
+		patchedFiles[fix.containerPath] = true
 	}
 
-	if len(servicesToRebuild) == 0 {
+	if len(containerPatches) == 0 {
 		fmt.Printf("\n%s[*]%s No patchable vulnerabilities found in scan\n", colorYellow, colorReset)
 		return
 	}
 
-	fmt.Printf("\n%s[+]%s Patched %d services\n", colorGreen, colorReset, len(servicesToRebuild))
-
-	// Build list of services to rebuild
-	var services []string
-	for svc := range servicesToRebuild {
-		services = append(services, svc)
-	}
-
-	// Rebuild only affected containers
-	fmt.Printf("\n%s[*]%s Rebuilding Docker containers: %v\n", colorBlue, colorReset, services)
-
-	args := append([]string{"-f", "lab/docker-compose.yml", "up", "-d", "--build"}, services...)
-	cmd := exec.Command("docker-compose", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		fmt.Printf("%s[-]%s Failed to rebuild containers: %v\n", colorRed, colorReset, err)
-		fmt.Printf("    Try manually: cd lab && docker-compose up -d --build %s\n", strings.Join(services, " "))
+	// Find the running vuln-lab container
+	containerName := "vuln-lab"
+	checkCmd := exec.Command("docker", "ps", "-q", "-f", "name="+containerName)
+	containerID, err := checkCmd.Output()
+	if err != nil || len(strings.TrimSpace(string(containerID))) == 0 {
+		fmt.Printf("%s[-]%s Container '%s' not running. Start it with:\n", colorRed, colorReset, containerName)
+		fmt.Printf("    cd lab/vuln-lab-image && docker-compose up -d\n")
 		return
 	}
 
-	fmt.Printf("\n%s[+]%s Containers rebuilt successfully!\n", colorGreen, colorReset)
-	fmt.Printf("\n%s[*]%s Verify fixes with: autopwn 127.0.0.1\n", colorBlue, colorReset)
+	fmt.Printf("%s[*]%s Found running container: %s\n", colorBlue, colorReset, containerName)
+
+	// Apply patches by copying secure files into container
+	patchedCount := 0
+	for _, patch := range containerPatches {
+		fmt.Printf("%s[*]%s Patching: %s\n", colorBlue, colorReset, patch.description)
+
+		// Docker cp the secure file into the container
+		cpCmd := exec.Command("docker", "cp", patch.secureFile, containerName+":"+patch.containerPath)
+		if output, err := cpCmd.CombinedOutput(); err != nil {
+			fmt.Printf("%s[-]%s Failed to patch %s: %v\n    %s\n", colorRed, colorReset, patch.description, err, string(output))
+			continue
+		}
+
+		fmt.Printf("%s[+]%s %sPATCHED%s: %s (%s)\n", colorGreen, colorReset, colorGreen, colorReset, patch.description, patch.severity)
+		patchedCount++
+	}
+
+	if patchedCount == 0 {
+		fmt.Printf("\n%s[-]%s No patches applied successfully\n", colorRed, colorReset)
+		return
+	}
+
+	fmt.Printf("\n%s[+]%s Applied %d patches\n", colorGreen, colorReset, patchedCount)
+
+	// Restart services in container using supervisorctl
+	fmt.Printf("\n%s[*]%s Restarting services in container...\n", colorBlue, colorReset)
+	restartCmd := exec.Command("docker", "exec", containerName, "supervisorctl", "restart", "all")
+	if output, err := restartCmd.CombinedOutput(); err != nil {
+		fmt.Printf("%s[!]%s Service restart warning: %v\n", colorYellow, colorReset, err)
+		fmt.Printf("    Output: %s\n", strings.TrimSpace(string(output)))
+		fmt.Printf("    You may need to restart manually: docker restart %s\n", containerName)
+	} else {
+		fmt.Printf("%s[+]%s Services restarted\n", colorGreen, colorReset)
+	}
+
+	fmt.Printf("\n%s[+]%s Fixes applied successfully!\n", colorGreen, colorReset)
+	fmt.Printf("\n%s[*]%s Verify fixes with: agents 127.0.0.1\n", colorBlue, colorReset)
 	fmt.Printf("%s[*]%s The patched vulnerabilities should now be FIXED\n", colorBlue, colorReset)
 }
 
@@ -1781,6 +2031,246 @@ func (c *Console) revertLabFixes() {
 	cmd := exec.Command("docker-compose", "-f", "lab/docker-compose.yml", "up", "-d", "--build", "xmlrpc", "grpc-server", "jsonrpc")
 	cmd.Run()
 	fmt.Printf("%s[+]%s Lab reverted to vulnerable state\n", colorGreen, colorReset)
+}
+
+// Vulnerabilities that REQUIRE human involvement - cannot be auto-fixed safely
+var humanRequiredVulns = map[string]string{
+	"ssh":                     "SSH hardening could lock out users - requires key setup first",
+	"weak_credentials":        "Password changes require human decision on new credentials",
+	"default_credentials":     "Credential changes require human decision",
+	"mysql_weak_credentials":  "Database credential changes require application updates",
+	"postgres_weak_password":  "Database credential changes require application updates",
+	"mongodb_unauth":          "Enabling auth requires creating admin user first",
+	"redis_unauth":            "Enabling auth requires updating all client applications",
+	"ssl_certificate":         "Certificate replacement requires procurement/generation",
+	"tls_weak_cipher":         "Cipher changes may break legacy clients",
+}
+
+// Vulnerabilities that CAN be auto-fixed safely by AI
+var autoFixableVulns = map[string]bool{
+	"command_injection":        true,
+	"rpc_command_injection":    true,
+	"sql_injection":            true,
+	"ssti":                     true,
+	"ssrf":                     true,
+	"path_traversal":           true,
+	"xxe":                      true,
+	"insecure_deserialization": true,
+	"information_disclosure":   true,
+	"security_header":          true,
+	"missing_header":           true,
+}
+
+// applyAIFixes uses AI to dynamically analyze and fix vulnerabilities
+func (c *Console) applyAIFixes(scanFile string) {
+	fmt.Printf("\n%s╔══════════════════════════════════════════════════════════════╗%s\n", colorBold+colorCyan, colorReset)
+	fmt.Printf("%s║          AI-DRIVEN VULNERABILITY FIXING                      ║%s\n", colorBold+colorCyan, colorReset)
+	fmt.Printf("%s╚══════════════════════════════════════════════════════════════╝%s\n\n", colorBold+colorCyan, colorReset)
+
+	// Load vulnerabilities from scan file
+	data, err := os.ReadFile(scanFile)
+	if err != nil {
+		fmt.Printf("%s[-]%s Failed to read scan file: %v\n", colorRed, colorReset, err)
+		return
+	}
+
+	var scanResult struct {
+		Vulnerabilities []struct {
+			Type        string `json:"type"`
+			Target      string `json:"target"`
+			Port        int    `json:"port"`
+			Service     string `json:"service"`
+			Severity    string `json:"severity"`
+			Description string `json:"description"`
+			Evidence    string `json:"evidence"`
+		} `json:"vulnerabilities"`
+	}
+
+	if err := json.Unmarshal(data, &scanResult); err != nil {
+		fmt.Printf("%s[-]%s Failed to parse scan file: %v\n", colorRed, colorReset, err)
+		return
+	}
+
+	fmt.Printf("%s[*]%s Loaded %d vulnerabilities from %s\n", colorBlue, colorReset, len(scanResult.Vulnerabilities), scanFile)
+
+	// Categorize vulnerabilities
+	var autoFixable []ai.VulnForFix
+	var humanRequired []struct {
+		vuln   string
+		reason string
+	}
+
+	for _, v := range scanResult.Vulnerabilities {
+		vulnLower := strings.ToLower(v.Type)
+
+		// Check if human required
+		humanReason := ""
+		for key, reason := range humanRequiredVulns {
+			if strings.Contains(vulnLower, key) {
+				humanReason = reason
+				break
+			}
+		}
+
+		if humanReason != "" {
+			humanRequired = append(humanRequired, struct {
+				vuln   string
+				reason string
+			}{v.Type, humanReason})
+			continue
+		}
+
+		// Check if auto-fixable
+		canAutoFix := false
+		for key := range autoFixableVulns {
+			if strings.Contains(vulnLower, key) {
+				canAutoFix = true
+				break
+			}
+		}
+
+		if canAutoFix {
+			// Extract port from target if not provided
+			port := v.Port
+			if port == 0 {
+				port = extractPortFromTarget(v.Target)
+			}
+			autoFixable = append(autoFixable, ai.VulnForFix{
+				Type:        v.Type,
+				Target:      v.Target,
+				Port:        port,
+				Service:     v.Service,
+				Severity:    v.Severity,
+				Description: v.Description,
+				Evidence:    v.Evidence,
+			})
+		} else {
+			// Unknown - add to human required for safety
+			humanRequired = append(humanRequired, struct {
+				vuln   string
+				reason string
+			}{v.Type, "Unknown vulnerability type - human review required"})
+		}
+	}
+
+	// Report human-required vulns first
+	if len(humanRequired) > 0 {
+		fmt.Printf("\n%s═══ VULNERABILITIES REQUIRING HUMAN INVOLVEMENT ═══%s\n", colorYellow, colorReset)
+		fmt.Printf("%s(These cannot be auto-fixed safely - manual remediation required)%s\n\n", colorYellow, colorReset)
+
+		for _, hr := range humanRequired {
+			fmt.Printf("  %s⚠%s  %s\n", colorYellow, colorReset, hr.vuln)
+			fmt.Printf("      Reason: %s\n\n", hr.reason)
+		}
+	}
+
+	if len(autoFixable) == 0 {
+		fmt.Printf("\n%s[*]%s No auto-fixable vulnerabilities found\n", colorYellow, colorReset)
+		return
+	}
+
+	// Create AI fixer
+	aiFixer, err := ai.NewAIFixer("vuln-lab", "output")
+	if err != nil {
+		fmt.Printf("%s[-]%s Failed to initialize AI fixer: %v\n", colorRed, colorReset, err)
+		return
+	}
+
+	fmt.Printf("\n%s═══ AUTO-FIXABLE VULNERABILITIES (%d) ═══%s\n\n", colorGreen, len(autoFixable), colorReset)
+
+	ctx := context.Background()
+	fixedCount := 0
+	failedCount := 0
+
+	for _, vuln := range autoFixable {
+		fmt.Printf("%s[AI]%s Analyzing: %s on port %d\n", colorBold+colorMagenta, colorReset, vuln.Type, vuln.Port)
+
+		result, err := aiFixer.GenerateAIFix(ctx, vuln)
+		if err != nil {
+			fmt.Printf("     %s[-]%s Analysis failed: %v\n", colorRed, colorReset, err)
+			failedCount++
+			continue
+		}
+
+		if result.Error != "" && result.FixedCode == "" {
+			fmt.Printf("     %s[!]%s Could not generate fix: %s\n", colorYellow, colorReset, result.Error)
+			if result.Explanation != "" {
+				fmt.Printf("     Guidance: %s\n", truncateString(result.Explanation, 200))
+			}
+			failedCount++
+			continue
+		}
+
+		if result.FixedCode != "" {
+			fmt.Printf("     %s[+]%s Fix generated for %s in container %s\n", colorGreen, colorReset, result.SourceFile, result.ContainerName)
+			fmt.Printf("     Explanation: %s\n", truncateString(result.Explanation, 150))
+
+			// Apply the fix
+			if err := aiFixer.ApplyFix(result); err != nil {
+				fmt.Printf("     %s[-]%s Failed to apply fix: %v\n", colorRed, colorReset, err)
+				failedCount++
+			} else {
+				fmt.Printf("     %s[+]%s %sFIX APPLIED%s to %s:%s\n", colorGreen, colorReset, colorGreen, colorReset, result.ContainerName, result.ContainerPath)
+				fixedCount++
+
+				// Restart this specific container
+				fmt.Printf("     %s[*]%s Restarting container %s...\n", colorBlue, colorReset, result.ContainerName)
+				if err := aiFixer.RestartContainerService(result.ContainerName); err != nil {
+					fmt.Printf("     %s[!]%s Container restart warning: %v\n", colorYellow, colorReset, err)
+				} else {
+					fmt.Printf("     %s[+]%s Container %s restarted\n", colorGreen, colorReset, result.ContainerName)
+				}
+			}
+		}
+		fmt.Println()
+	}
+
+	// Summary
+	fmt.Printf("\n%s═══ AI AUTOFIX SUMMARY ═══%s\n", colorBold+colorCyan, colorReset)
+	fmt.Printf("  Total vulnerabilities: %d\n", len(scanResult.Vulnerabilities))
+	fmt.Printf("  %sAuto-fixed:%s %d\n", colorGreen, colorReset, fixedCount)
+	fmt.Printf("  %sFailed/Skipped:%s %d\n", colorYellow, colorReset, failedCount)
+	fmt.Printf("  %sHuman required:%s %d\n", colorRed, colorReset, len(humanRequired))
+
+	if fixedCount > 0 {
+		fmt.Printf("\n%s[+]%s Verify fixes with: agents 127.0.0.1\n", colorGreen, colorReset)
+	}
+
+	if len(humanRequired) > 0 {
+		fmt.Printf("\n%s[!]%s Remember: %d vulnerabilities require human remediation\n", colorYellow, colorReset, len(humanRequired))
+	}
+}
+
+// truncateString truncates a string to maxLen and adds "..." if truncated
+func truncateString(s string, maxLen int) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
+// extractPortFromTarget extracts port number from target strings like "127.0.0.1:8086" or "http://127.0.0.1:8080"
+func extractPortFromTarget(target string) int {
+	// Remove protocol prefix if present
+	target = strings.TrimPrefix(target, "http://")
+	target = strings.TrimPrefix(target, "https://")
+
+	// Find the last colon followed by digits
+	lastColon := strings.LastIndex(target, ":")
+	if lastColon == -1 {
+		return 0
+	}
+
+	// Extract the port part (handle paths like :8080/path)
+	portStr := target[lastColon+1:]
+	if slashIdx := strings.Index(portStr, "/"); slashIdx != -1 {
+		portStr = portStr[:slashIdx]
+	}
+
+	var port int
+	fmt.Sscanf(portStr, "%d", &port)
+	return port
 }
 
 // cmdAutoPwnAgents runs the multi-agent parallel pentest
@@ -1897,5 +2387,22 @@ func (c *Console) cmdAutoPwnAgents(args []string) {
 		}
 		duration := status.EndTime.Sub(status.StartTime)
 		fmt.Printf("  %s: %s%s%s (%.1fs)\n", name, statusColor, status.Status, colorReset, duration.Seconds())
+	}
+
+	// Auto-save JSON and generate PDF report
+	if results != nil && (len(results.Vulnerabilities) > 0 || len(results.Credentials) > 0) {
+		os.MkdirAll("output/scans", 0755)
+		timestamp := time.Now().Format("20060102_150405")
+		jsonFile := fmt.Sprintf("output/scans/agents_%s_%s.json", strings.ReplaceAll(target, ".", "_"), timestamp)
+		pdfFile := fmt.Sprintf("output/scans/agents_%s_%s.pdf", strings.ReplaceAll(target, ".", "_"), timestamp)
+
+		if err := c.saveAgentsReportJSON(jsonFile, results); err != nil {
+			fmt.Printf("%s[-]%s Failed to save report: %v\n", colorRed, colorReset, err)
+		} else {
+			fmt.Printf("\n%s[+]%s JSON report saved: %s\n", colorGreen, colorReset, jsonFile)
+
+			// Auto-generate PDF
+			c.generatePDF(jsonFile, pdfFile)
+		}
 	}
 }
