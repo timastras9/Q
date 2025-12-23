@@ -66,6 +66,7 @@ Options:
 
 Environment Variables:
   ANTHROPIC_API_KEY    API key for Claude AI integration
+  NVD_API_KEY          API key for NVD vulnerability lookups (increases rate limits)
   TLS_ENABLED          Set to "true" to enable HTTPS (auto-generates self-signed cert)
   TLS_CERT             Path to TLS certificate file (default: /opt/data/certs/server.crt)
   TLS_KEY              Path to TLS private key file (default: /opt/data/certs/server.key)
@@ -82,13 +83,15 @@ Examples:
   TLS_ENABLED=true TLS_CERT=/path/cert.pem TLS_KEY=/path/key.pem pentestai --server
 
 API Endpoints (server mode):
-  POST /api/scan       - Start a scan (async)
-  GET  /api/scan/{id}  - Get scan status/results
-  POST /api/recon      - Quick port scan
-  POST /api/web-scan   - Web vulnerability scan
-  POST /api/exploit    - Run exploit module
-  POST /api/ai-analyze - AI analysis of results
-  GET  /api/health     - Health check
+  POST /api/scan         - Start a scan (async)
+  GET  /api/scan/{id}    - Get scan status/results
+  POST /api/recon        - Quick port scan
+  POST /api/web-scan     - Web vulnerability scan
+  POST /api/exploit      - Run exploit module
+  POST /api/ai-analyze   - AI analysis of results
+  GET  /api/cve          - CVE lookup (NVD + Exploit-DB)
+  POST /api/vuln-search  - Search vulnerabilities by product/service
+  GET  /api/health       - Health check
 
 IMPORTANT: Only use this tool on systems you have authorization to test.
 `

@@ -55,6 +55,8 @@ type Coordinator struct {
 	// Configuration
 	maxActionsPerAgent int
 	timeout           time.Duration
+	quickMode         bool
+	turboMode         bool // Run AI exploration in parallel, reduced iterations
 }
 
 // NewCoordinator creates a new multi-agent coordinator
@@ -86,6 +88,16 @@ func (c *Coordinator) SetMaxActionsPerAgent(max int) {
 // SetTimeout sets the overall timeout
 func (c *Coordinator) SetTimeout(timeout time.Duration) {
 	c.timeout = timeout
+}
+
+// SetQuickMode enables quick scan mode (skips AI exploration, faster checks)
+func (c *Coordinator) SetQuickMode(quick bool) {
+	c.quickMode = quick
+}
+
+// SetTurboMode enables turbo mode (AI exploration runs in parallel with agents)
+func (c *Coordinator) SetTurboMode(turbo bool) {
+	c.turboMode = turbo
 }
 
 // GetState returns the shared state
@@ -134,6 +146,23 @@ func (c *Coordinator) Run(ctx context.Context) error {
 
 	c.spawnServiceAgents()
 
+	// In turbo mode, start AI exploration in parallel with service agents
+	var aiWg sync.WaitGroup
+	if c.turboMode && !c.quickMode && c.aiClient != nil {
+		aiWg.Add(1)
+		go func() {
+			defer aiWg.Done()
+			// Wait a bit for initial findings
+			time.Sleep(500 * time.Millisecond)
+			if c.callbacks.OnAction != nil {
+				c.callbacks.OnAction("coordinator", "phase", "AI EXPLORATION (parallel)")
+			}
+			if err := c.runAIExploration(ctx); err != nil {
+				fmt.Printf("[COORDINATOR] AI exploration error: %v\n", err)
+			}
+		}()
+	}
+
 	// Wait for all service agents to complete
 	c.wg.Wait()
 
@@ -148,12 +177,20 @@ func (c *Coordinator) Run(ctx context.Context) error {
 	c.wg.Wait()
 
 	// Phase 4: AI Deep Exploration - Let Claude analyze findings and get curious
-	if c.aiClient != nil && c.callbacks.OnAction != nil {
-		c.callbacks.OnAction("coordinator", "phase", "AI DEEP EXPLORATION")
+	// Skip in quick mode and turbo mode (already ran in parallel)
+	if !c.quickMode && !c.turboMode {
+		if c.aiClient != nil && c.callbacks.OnAction != nil {
+			c.callbacks.OnAction("coordinator", "phase", "AI DEEP EXPLORATION")
+		}
+		if err := c.runAIExploration(ctx); err != nil {
+			// Non-fatal - just log it
+			fmt.Printf("[COORDINATOR] AI exploration error: %v\n", err)
+		}
 	}
-	if err := c.runAIExploration(ctx); err != nil {
-		// Non-fatal - just log it
-		fmt.Printf("[COORDINATOR] AI exploration error: %v\n", err)
+
+	// Wait for parallel AI exploration to complete in turbo mode
+	if c.turboMode {
+		aiWg.Wait()
 	}
 
 	// Report completion

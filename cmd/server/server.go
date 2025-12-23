@@ -29,17 +29,18 @@ import (
 )
 
 type Server struct {
-	port       string
-	tlsEnabled bool
-	certFile   string
-	keyFile    string
-	scanner    *recon.Scanner
-	webScanner *webapp.WebScanner
-	framework  *exploit.Framework
-	aiClient   *ai.ClaudeClient
-	store      *storage.Store
-	scans      map[string]*ScanJob
-	scansMu    sync.RWMutex
+	port         string
+	tlsEnabled   bool
+	certFile     string
+	keyFile      string
+	scanner      *recon.Scanner
+	webScanner   *webapp.WebScanner
+	framework    *exploit.Framework
+	aiClient     *ai.ClaudeClient
+	store        *storage.Store
+	scans        map[string]*ScanJob
+	scansMu      sync.RWMutex
+	vulnLookup   *exploit.VulnLookupService
 }
 
 type ScanJob struct {
@@ -67,6 +68,9 @@ type ScanResponse struct {
 }
 
 func NewServer(port string) *Server {
+	// Get NVD API key if set (optional, increases rate limits)
+	nvdAPIKey := os.Getenv("NVD_API_KEY")
+
 	s := &Server{
 		port:       port,
 		tlsEnabled: os.Getenv("TLS_ENABLED") == "true" || os.Getenv("TLS_ENABLED") == "1",
@@ -76,6 +80,7 @@ func NewServer(port string) *Server {
 		webScanner: webapp.NewWebScanner(),
 		framework:  exploit.NewFramework(),
 		scans:      make(map[string]*ScanJob),
+		vulnLookup: exploit.NewVulnLookupService(nvdAPIKey),
 	}
 
 	// Default cert paths if TLS enabled but paths not specified
@@ -117,6 +122,8 @@ func (s *Server) Run() {
 	mux.HandleFunc("/api/exploit", s.corsMiddleware(s.handleExploit))
 	mux.HandleFunc("/api/ai-analyze", s.corsMiddleware(s.handleAIAnalyze))
 	mux.HandleFunc("/api/health", s.corsMiddleware(s.handleHealth))
+	mux.HandleFunc("/api/cve", s.corsMiddleware(s.handleCVELookup))
+	mux.HandleFunc("/api/vuln-search", s.corsMiddleware(s.handleVulnSearch))
 
 	protocol := "http"
 	if s.tlsEnabled {
@@ -740,4 +747,160 @@ func isValidTarget(target string) bool {
 		}
 	}
 	return true
+}
+
+// CVE Lookup and Vulnerability Search handlers
+
+type CVELookupRequest struct {
+	CVE     string `json:"cve"`
+	Product string `json:"product,omitempty"`
+	Version string `json:"version,omitempty"`
+}
+
+type VulnSearchRequest struct {
+	Query   string `json:"query"`
+	Service string `json:"service,omitempty"`
+	Product string `json:"product,omitempty"`
+	Version string `json:"version,omitempty"`
+	Limit   int    `json:"limit,omitempty"`
+}
+
+// handleCVELookup handles CVE lookup requests
+// GET /api/cve?cve=CVE-2021-44228 or POST with JSON body
+func (s *Server) handleCVELookup(w http.ResponseWriter, r *http.Request) {
+	var cveID string
+
+	if r.Method == "GET" {
+		cveID = r.URL.Query().Get("cve")
+	} else if r.Method == "POST" {
+		var req CVELookupRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.errorResponse(w, "Invalid JSON", http.StatusBadRequest)
+			return
+		}
+		cveID = req.CVE
+	} else {
+		s.errorResponse(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if cveID == "" {
+		s.errorResponse(w, "CVE ID required", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	info, err := s.vulnLookup.LookupCVE(ctx, cveID)
+	if err != nil {
+		s.errorResponse(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	s.jsonResponse(w, ScanResponse{
+		Success: true,
+		Data: map[string]interface{}{
+			"vulnerability": info,
+			"formatted":     s.vulnLookup.FormatVulnerabilityReport(info),
+		},
+	})
+}
+
+// handleVulnSearch handles vulnerability search requests
+// POST /api/vuln-search with JSON body
+func (s *Server) handleVulnSearch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" && r.Method != "GET" {
+		s.errorResponse(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req VulnSearchRequest
+
+	if r.Method == "GET" {
+		req.Query = r.URL.Query().Get("query")
+		req.Service = r.URL.Query().Get("service")
+		req.Product = r.URL.Query().Get("product")
+		req.Version = r.URL.Query().Get("version")
+	} else {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.errorResponse(w, "Invalid JSON", http.StatusBadRequest)
+			return
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var results []*exploit.VulnerabilityInfo
+	var err error
+
+	if req.Service != "" || req.Product != "" {
+		// Search by service/product
+		results, err = s.vulnLookup.LookupByService(ctx, req.Service, req.Product, req.Version)
+	} else if req.Query != "" {
+		// General search - search local DB and ExploitDB
+		localResults := s.framework.SearchExploits(req.Query)
+
+		// Convert to VulnerabilityInfo
+		for _, entry := range localResults {
+			info := &exploit.VulnerabilityInfo{
+				Title:       entry.Name,
+				Description: entry.Description,
+				Type:        entry.Type,
+				Service:     entry.Service,
+				Port:        entry.Port,
+				Severity:    strings.ToUpper(entry.Severity),
+				Sources:     []string{"local"},
+			}
+			if len(entry.CVE) > 0 {
+				info.CVE = entry.CVE[0]
+			}
+			results = append(results, info)
+		}
+
+		// Also search ExploitDB
+		if s.vulnLookup.EnableExploitDB {
+			edbClient := exploit.NewExploitDBClient()
+			exploits, _ := edbClient.Search(ctx, req.Query)
+			for _, e := range exploits {
+				info := &exploit.VulnerabilityInfo{
+					Title:            e.Title,
+					HasPublicExploit: true,
+					Exploits:         []*exploit.PublicExploit{e},
+					Sources:          []string{"exploit-db"},
+				}
+				if len(e.CVE) > 0 {
+					info.CVE = e.CVE[0]
+				}
+				info.OtherIDs = append(info.OtherIDs, "EDB-"+e.ID)
+				results = append(results, info)
+			}
+		}
+	} else {
+		s.errorResponse(w, "Query, service, or product required", http.StatusBadRequest)
+		return
+	}
+
+	if err != nil {
+		s.errorResponse(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Limit results
+	limit := req.Limit
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	if len(results) > limit {
+		results = results[:limit]
+	}
+
+	s.jsonResponse(w, ScanResponse{
+		Success: true,
+		Data: map[string]interface{}{
+			"count":           len(results),
+			"vulnerabilities": results,
+		},
+	})
 }

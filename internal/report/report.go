@@ -22,6 +22,25 @@ type Report struct {
 	WebFindings []webapp.Finding
 	Exploits    []ExploitResult
 	Credentials []exploit.Credential
+
+	// Enhanced vulnerability intelligence
+	VulnDetails []VulnDetail `json:"vulnerability_details,omitempty"`
+}
+
+// VulnDetail contains enriched vulnerability information
+type VulnDetail struct {
+	CVE              string   `json:"cve"`
+	Title            string   `json:"title"`
+	Description      string   `json:"description"`
+	CVSSScore        float64  `json:"cvss_score"`
+	CVSSSeverity     string   `json:"cvss_severity"`
+	CVSSVector       string   `json:"cvss_vector,omitempty"`
+	AffectedProducts []string `json:"affected_products,omitempty"`
+	HasPublicExploit bool     `json:"has_public_exploit"`
+	ExploitIDs       []string `json:"exploit_ids,omitempty"` // Exploit-DB IDs
+	Remediation      string   `json:"remediation"`
+	PatchURLs        []string `json:"patch_urls,omitempty"`
+	References       []string `json:"references,omitempty"`
 }
 
 type ExecutiveSummary struct {
@@ -86,6 +105,46 @@ func (r *Report) AddExploitResult(result *exploit.ExploitResult) {
 	})
 
 	r.Credentials = append(r.Credentials, result.Credentials...)
+}
+
+// AddVulnDetail adds enriched vulnerability information to the report
+func (r *Report) AddVulnDetail(detail VulnDetail) {
+	// Check for duplicates by CVE
+	for i, existing := range r.VulnDetails {
+		if existing.CVE == detail.CVE {
+			// Merge information
+			if detail.CVSSScore > 0 {
+				r.VulnDetails[i].CVSSScore = detail.CVSSScore
+			}
+			if detail.CVSSSeverity != "" {
+				r.VulnDetails[i].CVSSSeverity = detail.CVSSSeverity
+			}
+			if detail.Remediation != "" {
+				r.VulnDetails[i].Remediation = detail.Remediation
+			}
+			r.VulnDetails[i].PatchURLs = appendUniqueStrings(r.VulnDetails[i].PatchURLs, detail.PatchURLs...)
+			r.VulnDetails[i].ExploitIDs = appendUniqueStrings(r.VulnDetails[i].ExploitIDs, detail.ExploitIDs...)
+			if detail.HasPublicExploit {
+				r.VulnDetails[i].HasPublicExploit = true
+			}
+			return
+		}
+	}
+	r.VulnDetails = append(r.VulnDetails, detail)
+}
+
+func appendUniqueStrings(slice []string, items ...string) []string {
+	seen := make(map[string]bool)
+	for _, s := range slice {
+		seen[s] = true
+	}
+	for _, item := range items {
+		if !seen[item] {
+			slice = append(slice, item)
+			seen[item] = true
+		}
+	}
+	return slice
 }
 
 func (r *Report) updateRiskRating() {
@@ -205,6 +264,150 @@ func (r *Report) ToMarkdown() string {
 			if finding.Remediation != "" {
 				sb.WriteString(fmt.Sprintf("**Remediation:** %s\n\n", finding.Remediation))
 			}
+		}
+	}
+
+	// Vulnerability Intelligence (CVE Details)
+	if len(r.VulnDetails) > 0 {
+		sb.WriteString("## Vulnerability Intelligence\n\n")
+		sb.WriteString("The following CVEs were identified and enriched with data from NVD and Exploit-DB:\n\n")
+
+		// Sort by CVSS score (highest first)
+		sortedVulns := make([]VulnDetail, len(r.VulnDetails))
+		copy(sortedVulns, r.VulnDetails)
+		for i := 0; i < len(sortedVulns)-1; i++ {
+			for j := i + 1; j < len(sortedVulns); j++ {
+				if sortedVulns[j].CVSSScore > sortedVulns[i].CVSSScore {
+					sortedVulns[i], sortedVulns[j] = sortedVulns[j], sortedVulns[i]
+				}
+			}
+		}
+
+		for i, vuln := range sortedVulns {
+			// Severity emoji
+			severityEmoji := "ℹ️"
+			switch strings.ToUpper(vuln.CVSSSeverity) {
+			case "CRITICAL":
+				severityEmoji = "🔴"
+			case "HIGH":
+				severityEmoji = "🟠"
+			case "MEDIUM":
+				severityEmoji = "🟡"
+			case "LOW":
+				severityEmoji = "🟢"
+			}
+
+			sb.WriteString(fmt.Sprintf("### %d. %s %s\n\n", i+1, severityEmoji, vuln.CVE))
+			sb.WriteString(fmt.Sprintf("**Title:** %s\n\n", vuln.Title))
+
+			// CVSS Score
+			if vuln.CVSSScore > 0 {
+				sb.WriteString(fmt.Sprintf("**CVSS Score:** %.1f (%s)\n\n", vuln.CVSSScore, vuln.CVSSSeverity))
+				if vuln.CVSSVector != "" {
+					sb.WriteString(fmt.Sprintf("**Vector:** `%s`\n\n", vuln.CVSSVector))
+				}
+			}
+
+			// Description
+			if vuln.Description != "" {
+				sb.WriteString(fmt.Sprintf("**Description:**\n%s\n\n", vuln.Description))
+			}
+
+			// Public Exploit Warning
+			if vuln.HasPublicExploit {
+				sb.WriteString("**⚠️ PUBLIC EXPLOIT AVAILABLE**\n\n")
+				if len(vuln.ExploitIDs) > 0 {
+					sb.WriteString("Exploit-DB IDs: ")
+					for j, eid := range vuln.ExploitIDs {
+						if j > 0 {
+							sb.WriteString(", ")
+						}
+						sb.WriteString(fmt.Sprintf("[%s](https://www.exploit-db.com/exploits/%s)", eid, strings.TrimPrefix(eid, "EDB-")))
+					}
+					sb.WriteString("\n\n")
+				}
+			}
+
+			// Affected Products
+			if len(vuln.AffectedProducts) > 0 {
+				sb.WriteString("**Affected Products:**\n")
+				for _, p := range vuln.AffectedProducts {
+					sb.WriteString(fmt.Sprintf("- %s\n", p))
+				}
+				sb.WriteString("\n")
+			}
+
+			// Remediation
+			if vuln.Remediation != "" {
+				sb.WriteString("**Remediation:**\n")
+				sb.WriteString(fmt.Sprintf("%s\n\n", vuln.Remediation))
+			}
+
+			// Patch URLs
+			if len(vuln.PatchURLs) > 0 {
+				sb.WriteString("**Patch/Advisory Links:**\n")
+				for _, url := range vuln.PatchURLs {
+					sb.WriteString(fmt.Sprintf("- %s\n", url))
+				}
+				sb.WriteString("\n")
+			}
+
+			// References (limit to 3)
+			if len(vuln.References) > 0 {
+				sb.WriteString("**References:**\n")
+				limit := len(vuln.References)
+				if limit > 3 {
+					limit = 3
+				}
+				for j := 0; j < limit; j++ {
+					sb.WriteString(fmt.Sprintf("- %s\n", vuln.References[j]))
+				}
+				if len(vuln.References) > 3 {
+					sb.WriteString(fmt.Sprintf("- ... and %d more\n", len(vuln.References)-3))
+				}
+				sb.WriteString("\n")
+			}
+
+			sb.WriteString("---\n\n")
+		}
+
+		// Remediation Priority Summary
+		sb.WriteString("### Remediation Priority Summary\n\n")
+		critical, high, medium, low := 0, 0, 0, 0
+		hasExploit := 0
+		for _, v := range r.VulnDetails {
+			switch strings.ToUpper(v.CVSSSeverity) {
+			case "CRITICAL":
+				critical++
+			case "HIGH":
+				high++
+			case "MEDIUM":
+				medium++
+			case "LOW":
+				low++
+			}
+			if v.HasPublicExploit {
+				hasExploit++
+			}
+		}
+		sb.WriteString("| Priority | Count | Action |\n")
+		sb.WriteString("|----------|-------|--------|\n")
+		if critical > 0 {
+			sb.WriteString(fmt.Sprintf("| 🔴 Critical | %d | **Fix immediately** |\n", critical))
+		}
+		if high > 0 {
+			sb.WriteString(fmt.Sprintf("| 🟠 High | %d | Fix within 24-48 hours |\n", high))
+		}
+		if medium > 0 {
+			sb.WriteString(fmt.Sprintf("| 🟡 Medium | %d | Schedule for patching |\n", medium))
+		}
+		if low > 0 {
+			sb.WriteString(fmt.Sprintf("| 🟢 Low | %d | Address in next maintenance |\n", low))
+		}
+		sb.WriteString("\n")
+
+		if hasExploit > 0 {
+			sb.WriteString(fmt.Sprintf("**⚠️ WARNING:** %d vulnerabilities have public exploits available. These should be prioritized!\n\n", hasExploit))
 		}
 	}
 

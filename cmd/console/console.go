@@ -37,6 +37,7 @@ type Console struct {
 	scanner       *recon.Scanner
 	webScanner    *webapp.WebScanner
 	ai            *ai.ClaudeClient
+	vulnLookup    *exploit.VulnLookupService
 	currentModule exploit.Exploit
 	workspace     string
 	history       []string
@@ -46,10 +47,14 @@ type Console struct {
 }
 
 func NewConsole() *Console {
+	// Get NVD API key from environment
+	nvdAPIKey := os.Getenv("NVD_API_KEY")
+
 	return &Console{
 		framework:  exploit.NewFramework(),
 		scanner:    recon.NewScanner(),
 		webScanner: webapp.NewWebScanner(),
+		vulnLookup: exploit.NewVulnLookupService(nvdAPIKey),
 		workspace:  "default",
 		running:    true,
 	}
@@ -1191,6 +1196,18 @@ type ReportData struct {
 	Tests           []TestResult `json:"tests"`
 	Vulnerabilities []VulnEntry  `json:"vulnerabilities"`
 	Credentials     []CredEntry  `json:"credentials"`
+	CVEs            []CVEEntry   `json:"cves,omitempty"`
+}
+
+// CVEEntry represents CVE data for the report
+type CVEEntry struct {
+	ID          string   `json:"id"`
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+	CVSSScore   float64  `json:"cvss_score"`
+	Severity    string   `json:"severity"`
+	Remediation string   `json:"remediation"`
+	PatchURLs   []string `json:"patch_urls,omitempty"`
 }
 
 type TestResult struct {
@@ -1286,6 +1303,7 @@ func (c *Console) saveAgentsReportJSON(filename string, state *ai.ScanState) err
 		Tests:           make([]TestResult, 0),
 		Vulnerabilities: make([]VulnEntry, 0),
 		Credentials:     make([]CredEntry, 0),
+		CVEs:            make([]CVEEntry, 0),
 	}
 
 	// Convert action history to test results
@@ -1324,6 +1342,33 @@ func (c *Console) saveAgentsReportJSON(filename string, state *ai.ScanState) err
 			Type:     credType,
 			Source:   cred.Service,
 		})
+	}
+
+	// Look up CVE data for vulnerabilities
+	if c.vulnLookup != nil && c.lastScanState != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		cveInfos := c.lookupVulnerabilityCVEs(ctx, c.lastScanState)
+		for _, info := range cveInfos {
+			if info != nil && info.CVE != "" {
+				entry := CVEEntry{
+					ID:          info.CVE,
+					Title:       info.Title,
+					Description: info.Description,
+					Severity:    info.Severity,
+				}
+				// Get CVSS score if available
+				if info.CVSS != nil {
+					entry.CVSSScore = info.CVSS.BaseScore
+				}
+				// Get remediation info if available
+				if info.Remediation != nil {
+					entry.Remediation = info.Remediation.Summary
+					entry.PatchURLs = info.Remediation.PatchURLs
+				}
+				data.CVEs = append(data.CVEs, entry)
+			}
+		}
 	}
 
 	jsonData, err := json.MarshalIndent(data, "", "  ")
@@ -1638,6 +1683,106 @@ func (c *Console) generateMarkdownReport(state *ai.PentestState) string {
 		}
 	}
 
+	// CVE Intelligence - Enrich vulnerabilities with NVD/Exploit-DB data
+	if c.vulnLookup != nil && len(state.Vulnerabilities) > 0 {
+		sb.WriteString("\n## Vulnerability Intelligence (CVE Details)\n\n")
+		sb.WriteString("*Data enriched from NVD and Exploit-DB*\n\n")
+
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		// Look up CVEs based on vulnerability types and services
+		cveInfos := c.lookupVulnerabilityCVEs(ctx, state)
+
+		if len(cveInfos) > 0 {
+			for _, info := range cveInfos {
+				// Severity emoji
+				severityEmoji := "ℹ️"
+				switch strings.ToUpper(info.Severity) {
+				case "CRITICAL":
+					severityEmoji = "🔴"
+				case "HIGH":
+					severityEmoji = "🟠"
+				case "MEDIUM":
+					severityEmoji = "🟡"
+				case "LOW":
+					severityEmoji = "🟢"
+				}
+
+				sb.WriteString(fmt.Sprintf("### %s %s\n\n", severityEmoji, info.CVE))
+				sb.WriteString(fmt.Sprintf("**Title:** %s\n\n", info.Title))
+
+				if info.CVSS != nil {
+					sb.WriteString(fmt.Sprintf("**CVSS Score:** %.1f (%s)\n\n", info.CVSS.BaseScore, info.Severity))
+				}
+
+				if info.Description != "" {
+					desc := info.Description
+					if len(desc) > 500 {
+						desc = desc[:500] + "..."
+					}
+					sb.WriteString(fmt.Sprintf("**Description:** %s\n\n", desc))
+				}
+
+				if info.HasPublicExploit {
+					sb.WriteString("**⚠️ PUBLIC EXPLOIT AVAILABLE**\n\n")
+				}
+
+				if info.Remediation != nil && info.Remediation.Summary != "" {
+					sb.WriteString(fmt.Sprintf("**Remediation:** %s\n\n", info.Remediation.Summary))
+					if len(info.Remediation.PatchURLs) > 0 {
+						sb.WriteString("**Patch URLs:**\n")
+						for _, url := range info.Remediation.PatchURLs[:min(3, len(info.Remediation.PatchURLs))] {
+							sb.WriteString(fmt.Sprintf("- %s\n", url))
+						}
+						sb.WriteString("\n")
+					}
+				}
+
+				sb.WriteString("---\n\n")
+			}
+
+			// Priority summary
+			sb.WriteString("### Remediation Priority\n\n")
+			sb.WriteString("| Priority | Count | Action |\n")
+			sb.WriteString("|----------|-------|--------|\n")
+			critical, high, medium, low := 0, 0, 0, 0
+			hasExploit := 0
+			for _, info := range cveInfos {
+				switch strings.ToUpper(info.Severity) {
+				case "CRITICAL":
+					critical++
+				case "HIGH":
+					high++
+				case "MEDIUM":
+					medium++
+				case "LOW":
+					low++
+				}
+				if info.HasPublicExploit {
+					hasExploit++
+				}
+			}
+			if critical > 0 {
+				sb.WriteString(fmt.Sprintf("| 🔴 Critical | %d | **Fix immediately** |\n", critical))
+			}
+			if high > 0 {
+				sb.WriteString(fmt.Sprintf("| 🟠 High | %d | Fix within 24-48 hours |\n", high))
+			}
+			if medium > 0 {
+				sb.WriteString(fmt.Sprintf("| 🟡 Medium | %d | Schedule for patching |\n", medium))
+			}
+			if low > 0 {
+				sb.WriteString(fmt.Sprintf("| 🟢 Low | %d | Address in next maintenance |\n", low))
+			}
+			if hasExploit > 0 {
+				sb.WriteString(fmt.Sprintf("\n**⚠️ WARNING:** %d vulnerabilities have public exploits!\n", hasExploit))
+			}
+		} else {
+			sb.WriteString("*No additional CVE data found for detected vulnerabilities.*\n")
+		}
+	}
+
 	sb.WriteString("\n---\n\n*Generated by PentestAI*\n")
 
 	return sb.String()
@@ -1664,6 +1809,120 @@ func parsePorts(s string) []int {
 		}
 	}
 	return ports
+}
+
+// lookupVulnerabilityCVEs enriches vulnerabilities with CVE data from NVD/Exploit-DB
+func (c *Console) lookupVulnerabilityCVEs(ctx context.Context, state *ai.PentestState) []*exploit.VulnerabilityInfo {
+	if c.vulnLookup == nil {
+		return nil
+	}
+
+	var results []*exploit.VulnerabilityInfo
+	seen := make(map[string]bool)
+
+	// Map vulnerability types to likely CVEs/products
+	vulnTypeToCVE := map[string][]string{
+		"sqli":                   {"sql injection"},
+		"sql_injection":          {"sql injection"},
+		"xss":                    {"cross-site scripting", "xss"},
+		"lfi":                    {"local file inclusion", "path traversal"},
+		"rce":                    {"remote code execution"},
+		"command_injection":      {"command injection", "os command"},
+		"cmd_injection":          {"command injection", "os command"},
+		"ssrf":                   {"server-side request forgery", "ssrf"},
+		"redis_unauth":           {"redis"},
+		"mongodb_unauth":         {"mongodb"},
+		"ssh_weak":               {"ssh"},
+		"ssh_weak_credentials":   {"ssh", "openssh"},
+		"ftp_anonymous":          {"ftp anonymous"},
+		"rpc_command_injection":  {"xml-rpc", "xmlrpc", "remote code execution"},
+		"xmlrpc_exploit":         {"xml-rpc", "xmlrpc"},
+		"jsonrpc_exploit":        {"json-rpc", "jsonrpc"},
+		"grpc_exploit":           {"grpc"},
+		"grpc_command_injection": {"grpc", "remote code execution"},
+		"ssl_vulnerabilities":    {"ssl", "tls", "openssl"},
+		"auth_headers":           {"authentication bypass"},
+	}
+
+	// Map services to products for CVE lookup
+	serviceToCVE := map[string]string{
+		"redis":         "redis",
+		"mongodb":       "mongodb",
+		"mysql":         "mysql",
+		"postgresql":    "postgresql",
+		"elasticsearch": "elasticsearch",
+		"apache":        "apache http server",
+		"nginx":         "nginx",
+		"tomcat":        "apache tomcat",
+		"jenkins":       "jenkins",
+	}
+
+	// Look up CVEs for each vulnerability type
+	for _, vuln := range state.Vulnerabilities {
+		vulnType := strings.ToLower(vuln.Type)
+
+		// Try to find relevant CVEs
+		searchTerms := vulnTypeToCVE[vulnType]
+		if len(searchTerms) == 0 {
+			searchTerms = []string{vulnType}
+		}
+
+		for _, term := range searchTerms {
+			if seen[term] {
+				continue
+			}
+			seen[term] = true
+
+			// Search local exploit database
+			localResults := c.framework.SearchExploits(term)
+			for _, entry := range localResults {
+				if len(entry.CVE) > 0 {
+					// Look up full CVE details
+					for _, cveID := range entry.CVE {
+						if seen[cveID] {
+							continue
+						}
+						seen[cveID] = true
+
+						info, err := c.vulnLookup.LookupCVE(ctx, cveID)
+						if err == nil && info != nil {
+							results = append(results, info)
+							if len(results) >= 10 { // Limit to 10 CVEs
+								return results
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Also check discovered services
+	for _, svc := range state.Services {
+		service := strings.ToLower(svc.Name)
+		if product, ok := serviceToCVE[service]; ok {
+			if seen[product] {
+				continue
+			}
+			seen[product] = true
+
+			// Search for service-specific vulnerabilities
+			infos, err := c.vulnLookup.LookupByService(ctx, service, product, svc.Version)
+			if err == nil {
+				for _, info := range infos {
+					if info.CVE != "" && !seen[info.CVE] {
+						seen[info.CVE] = true
+						results = append(results, info)
+						if len(results) >= 10 {
+							return results
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return results
 }
 
 // cmdAutoFix generates remediation fixes for vulnerabilities found in a scan
@@ -2276,8 +2535,10 @@ func extractPortFromTarget(target string) int {
 // cmdAutoPwnAgents runs the multi-agent parallel pentest
 func (c *Console) cmdAutoPwnAgents(args []string) {
 	if len(args) == 0 {
-		fmt.Printf("%s[-]%s Usage: autopwn-agents <target> [--max-actions N] [--timeout M]\n", colorRed, colorReset)
+		fmt.Printf("%s[-]%s Usage: autopwn-agents <target> [--quick] [--turbo] [--max-actions N] [--timeout M]\n", colorRed, colorReset)
 		fmt.Println("  Example: agents 192.168.1.1")
+		fmt.Println("  Example: agents 127.0.0.1 --quick        # Fast scan, no AI (~1s)")
+		fmt.Println("  Example: agents 127.0.0.1 --turbo        # Fast + AI parallel (~30s)")
 		fmt.Println("  Example: agents 127.0.0.1 --max-actions 15")
 		fmt.Println("\nMulti-agent mode runs specialized agents in parallel:")
 		fmt.Println("  - Recon Agent: Port scanning, service discovery")
@@ -2292,6 +2553,8 @@ func (c *Console) cmdAutoPwnAgents(args []string) {
 	target := args[0]
 	maxActions := 15
 	timeout := 10 * time.Minute
+	quickMode := false
+	turboMode := false
 
 	for i := 1; i < len(args); i++ {
 		if args[i] == "--max-actions" && i+1 < len(args) {
@@ -2303,13 +2566,34 @@ func (c *Console) cmdAutoPwnAgents(args []string) {
 			timeout = time.Duration(mins) * time.Minute
 			i++
 		}
+		if args[i] == "--quick" || args[i] == "-q" {
+			quickMode = true
+			maxActions = 5
+			timeout = 2 * time.Minute
+		}
+		if args[i] == "--turbo" || args[i] == "-t" {
+			turboMode = true
+			maxActions = 8 // Reduced for speed
+			timeout = 3 * time.Minute
+		}
 	}
 
 	fmt.Printf("\n%s%s╔══════════════════════════════════════════════════════════════╗%s\n", colorBold, colorCyan, colorReset)
-	fmt.Printf("%s%s║        MULTI-AGENT PARALLEL PENETRATION TEST                 ║%s\n", colorBold, colorCyan, colorReset)
+	if quickMode {
+		fmt.Printf("%s%s║        QUICK VULNERABILITY SCAN                               ║%s\n", colorBold, colorCyan, colorReset)
+	} else if turboMode {
+		fmt.Printf("%s%s║        TURBO PENETRATION TEST (AI parallel)                  ║%s\n", colorBold, colorCyan, colorReset)
+	} else {
+		fmt.Printf("%s%s║        MULTI-AGENT PARALLEL PENETRATION TEST                 ║%s\n", colorBold, colorCyan, colorReset)
+	}
 	fmt.Printf("%s%s╚══════════════════════════════════════════════════════════════╝%s\n\n", colorBold, colorCyan, colorReset)
 
 	fmt.Printf("%s[*]%s Target: %s\n", colorBlue, colorReset, target)
+	if quickMode {
+		fmt.Printf("%s[*]%s Mode: QUICK (skipping AI exploration)\n", colorBlue, colorReset)
+	} else if turboMode {
+		fmt.Printf("%s[*]%s Mode: TURBO (AI runs in parallel with agents)\n", colorBlue, colorReset)
+	}
 	fmt.Printf("%s[*]%s Max Actions per Agent: %d\n", colorBlue, colorReset, maxActions)
 	fmt.Printf("%s[*]%s Timeout: %v\n", colorBlue, colorReset, timeout)
 	fmt.Printf("%s[*]%s Parallel agents will coordinate their efforts.\n\n", colorBlue, colorReset)
@@ -2318,6 +2602,8 @@ func (c *Console) cmdAutoPwnAgents(args []string) {
 	coordinator := ai.NewCoordinator(target, c.framework, c.ai)
 	coordinator.SetMaxActionsPerAgent(maxActions)
 	coordinator.SetTimeout(timeout)
+	coordinator.SetQuickMode(quickMode)
+	coordinator.SetTurboMode(turboMode)
 
 	// Set up callbacks for progress reporting
 	coordinator.SetCallbacks(ai.AgentCallbacks{
@@ -2389,6 +2675,11 @@ func (c *Console) cmdAutoPwnAgents(args []string) {
 		fmt.Printf("  %s: %s%s%s (%.1fs)\n", name, statusColor, status.Status, colorReset, duration.Seconds())
 	}
 
+	// Convert ScanState to PentestState for report compatibility
+	if results != nil {
+		c.lastScanState = c.convertScanStateToPentestState(results)
+	}
+
 	// Auto-save JSON and generate PDF report
 	if results != nil && (len(results.Vulnerabilities) > 0 || len(results.Credentials) > 0) {
 		os.MkdirAll("output/scans", 0755)
@@ -2404,5 +2695,47 @@ func (c *Console) cmdAutoPwnAgents(args []string) {
 			// Auto-generate PDF
 			c.generatePDF(jsonFile, pdfFile)
 		}
+	}
+}
+
+// convertScanStateToPentestState converts a ScanState to PentestState for report compatibility
+func (c *Console) convertScanStateToPentestState(state *ai.ScanState) *ai.PentestState {
+	if state == nil {
+		return nil
+	}
+
+	// Convert credentials
+	var credentials []ai.CredentialFind
+	for _, cred := range state.Credentials {
+		credentials = append(credentials, ai.CredentialFind{
+			Username: cred.Username,
+			Password: cred.Password,
+			Hash:     cred.Hash,
+			Service:  cred.Service,
+			Target:   cred.Target,
+		})
+	}
+
+	// Extract services from open ports (if available in action history)
+	var services []ai.ServiceInfo
+	for _, port := range state.OpenPorts {
+		services = append(services, ai.ServiceInfo{
+			Host: port.Host,
+			Port: port.Port,
+			Name: "unknown", // Will be enriched if available
+		})
+	}
+
+	return &ai.PentestState{
+		Target:          state.Target,
+		Scope:           []string{state.Target},
+		Phase:           "completed",
+		DiscoveredHosts: state.DiscoveredHosts,
+		OpenPorts:       state.OpenPorts,
+		Services:        services,
+		Vulnerabilities: state.Vulnerabilities,
+		Credentials:     credentials,
+		Sessions:        nil, // Not available from ScanState
+		ActionHistory:   state.ActionHistory,
 	}
 }

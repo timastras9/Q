@@ -336,6 +336,68 @@ function generateReport(scanData, outputPath) {
         y += 58;
     });
     
+    // ============ CVE INTELLIGENCE ============
+    const cves = scanData.cves || [];
+    if (cves.length > 0) {
+        doc.addPage();
+        doc.rect(50, 40, contentWidth, 3).fill(colors.critical);
+        doc.fontSize(18).fillColor(colors.primary);
+        safeText('CVE INTELLIGENCE', 50, 55);
+
+        doc.fontSize(9).fillColor(colors.lightText);
+        safeText('Known vulnerabilities identified from NVD and Exploit-DB databases', 50, 78);
+
+        y = 100;
+        cves.forEach((cve, i) => {
+            if (y > pageHeight - 150) {
+                doc.addPage();
+                y = 50;
+            }
+
+            // CVE card
+            const cardHeight = 110;
+            doc.roundedRect(50, y, contentWidth, cardHeight, 5).fillAndStroke('#ffffff', colors.border);
+
+            // Severity badge
+            const sevColor = cve.severity?.toLowerCase() === 'critical' ? colors.critical :
+                            cve.severity?.toLowerCase() === 'high' ? colors.high :
+                            cve.severity?.toLowerCase() === 'medium' ? colors.medium : colors.low;
+            doc.roundedRect(55, y + 8, 80, 20, 10).fill(sevColor);
+            doc.fontSize(9).fillColor('#ffffff');
+            safeText((cve.severity || 'UNKNOWN').toUpperCase(), 55, y + 13, { width: 80, align: 'center' });
+
+            // CVE ID and CVSS
+            doc.fontSize(14).fillColor(colors.primary);
+            safeText(cve.id || 'Unknown CVE', 145, y + 10);
+
+            doc.fontSize(11).fillColor(sevColor);
+            safeText(`CVSS: ${cve.cvss_score?.toFixed(1) || 'N/A'}`, pageWidth - 130, y + 10);
+
+            // Title
+            doc.fontSize(10).fillColor(colors.text);
+            safeText((cve.title || 'Untitled').substring(0, 70), 55, y + 35);
+
+            // Description (truncated)
+            doc.fontSize(8).fillColor(colors.lightText);
+            const desc = (cve.description || 'No description available').substring(0, 200);
+            doc.text(desc, 55, y + 52, { width: contentWidth - 20, height: 30, lineBreak: true, ellipsis: true });
+
+            // Remediation
+            doc.fontSize(8).fillColor(colors.primary);
+            safeText('Remediation:', 55, y + 85);
+            doc.fillColor(colors.text);
+            safeText((cve.remediation || 'Apply vendor patches').substring(0, 80), 115, y + 85);
+
+            // Patch URLs (if any)
+            if (cve.patch_urls && cve.patch_urls.length > 0) {
+                doc.fontSize(7).fillColor(colors.accent);
+                safeText(`Patch: ${cve.patch_urls[0].substring(0, 60)}`, 55, y + 98);
+            }
+
+            y += cardHeight + 10;
+        });
+    }
+
     // ============ TEST RESULTS ============
     doc.addPage();
     doc.rect(50, 40, contentWidth, 3).fill(colors.accent);
