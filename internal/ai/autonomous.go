@@ -21,6 +21,7 @@ type AutoPentester struct {
 	sessions    []SessionInfo
 	history     []Action
 	exploitDB   *exploit.ExploitDatabase // RAG exploit database
+	aei         *AEI                      // Adaptive Exploitation Intelligence
 }
 
 type Finding struct {
@@ -122,6 +123,11 @@ func NewAutoPentester(client *ClaudeClient) *AutoPentester {
 // SetExploitDB sets a custom exploit database
 func (a *AutoPentester) SetExploitDB(db *exploit.ExploitDatabase) {
 	a.exploitDB = db
+}
+
+// SetAEI sets the Adaptive Exploitation Intelligence engine
+func (a *AutoPentester) SetAEI(aei *AEI) {
+	a.aei = aei
 }
 
 // convertServicesToDiscovery converts ServiceInfo to exploit.ServiceDiscovery for RAG queries
@@ -398,6 +404,26 @@ func (a *AutoPentester) GetNextAction(ctx context.Context, state *PentestState) 
 	// Get RAG exploit recommendations for AI context
 	exploitRecs := a.getExploitRecommendations(state)
 
+	// Get AEI (Adaptive Exploitation Intelligence) recommendations
+	aeiContext := ""
+	if a.aei != nil {
+		// Build context for AEI
+		ports := make([]int, len(state.OpenPorts))
+		for i, p := range state.OpenPorts {
+			ports[i] = p.Port
+		}
+		priorActions := make([]string, len(state.ActionHistory))
+		for i, act := range state.ActionHistory {
+			priorActions[i] = act.Type
+		}
+		ctx := ActionContext{
+			OpenPorts:    ports,
+			HasCreds:     len(state.Credentials) > 0,
+			PriorActions: priorActions,
+		}
+		aeiContext = a.aei.GetPromptContext(ctx)
+	}
+
 	statusStr := ""
 	if len(statusNotes) > 0 {
 		statusStr = "\nSTATUS: " + strings.Join(statusNotes, ", ") + "\n"
@@ -459,6 +485,15 @@ NOTE: Do NOT try mysql_check or postgres_check yet - these require credentials!
 
 === PRIORITY 5: POST-EXPLOITATION (ONLY after finding credentials!) ===
 - ssh_recon: MUST run after ssh_login success! (target=ip:port)
+- privesc: CRITICAL! After ssh_login/ssh_recon, run PRIVILEGE ESCALATION scan! (target=ip:port) - finds:
+  * Sudo NOPASSWD commands - instant root!
+  * SUID binaries (GTFOBins) - escalation vectors!
+  * Docker socket access - container escape to root!
+  * Container escape techniques - break out of containers!
+  * Credential harvesting - SSH keys, .env files, bash history, /etc/shadow!
+  * Cron job hijacking - writable crontabs!
+  * Writable PATH directories - privilege escalation!
+  * Kernel exploit detection - known CVEs!
 - ssh_pivot: After ssh_recon, discover internal networks via SSH! (target=ip:port) - finds hidden hosts!
 - pivot_scan: After ssh_pivot finds hosts, DEEP SCAN internal hosts! (target=ip) - finds internal services!
 - cred_spray: CRITICAL! After finding ANY credentials, spray them on MySQL/PostgreSQL/FTP! (target=ip)
@@ -482,15 +517,18 @@ RULES:
 1. NEVER repeat exact same action+target - try a DIFFERENT port or action!
 2. If something failed, try a DIFFERENT service, not the same one
 3. Be CURIOUS - test unusual ports, they often have vulns!
-4. After ssh_login succeeds -> IMMEDIATELY do ssh_recon!
-5. Test ALL RPC ports - they're gold mines for RCE
-6. Don't complete early - explore MORE services first!
-7. After ANY credentials found -> run cred_spray to test password reuse on databases!
-8. DO NOT use mysql_check or postgres_check until you have found credentials! Use cred_spray instead.
-9. NO-AUTH checks (redis_check, mongodb_check) should be done BEFORE credential-based checks!
+4. After ssh_login succeeds -> IMMEDIATELY do ssh_recon, then privesc!
+5. After ssh_recon succeeds -> run privesc to find privilege escalation vectors!
+6. Test ALL RPC ports - they're gold mines for RCE
+7. Don't complete early - explore MORE services first!
+8. After ANY credentials found -> run cred_spray to test password reuse on databases!
+9. DO NOT use mysql_check or postgres_check until you have found credentials! Use cred_spray instead.
+10. NO-AUTH checks (redis_check, mongodb_check) should be done BEFORE credential-based checks!
+
+%s
 
 Reply with JSON only:
-{"action":"x","target":"ip:port","reasoning":"why this specific target","risk_level":"low|med|high|critical"}`, statusStr, summary, exploitRecs, strings.Join(completedList, ", "))
+{"action":"x","target":"ip:port","reasoning":"why this specific target","risk_level":"low|med|high|critical"}`, statusStr, summary, exploitRecs, strings.Join(completedList, ", "), aeiContext)
 
 	messages := []Message{
 		{Role: "user", Content: prompt},
@@ -540,7 +578,7 @@ Reply with JSON only:
 		"ssh_exec": true, "ftp_login": true, "ftp_anon": true,
 		"http_login": true, "redis_check": true, "cmd_inject": true,
 		"sqli_exploit": true, "complete": true, "full_scan": true,
-		"ssh_recon": true, "ssh_pivot": true, "pivot_scan": true, "reverse_shell": true, "cred_spray": true,
+		"ssh_recon": true, "privesc": true, "ssh_pivot": true, "pivot_scan": true, "reverse_shell": true, "cred_spray": true,
 		"db_enum": true, "lfi_exploit": true, "ssrf_exploit": true, "file_upload": true,
 		"nuclei_scan": true, "xss_scan": true, "nikto_scan": true,
 		"subdomain_enum": true, "ssl_scan": true, "api_fuzz": true,
@@ -642,17 +680,52 @@ Reply with JSON only:
 		decision = a.findAlternativeAction(state, &decision, completedActions, failedCounts, successCounts)
 	}
 
-	// FORCE ssh_recon after ssh_login success
+	// AGGRESSIVE: Force ssh_recon/privesc IMMEDIATELY after ssh_login success
+	// Don't wait for AI to try to complete - these are critical post-exploitation steps
+	for _, action := range state.ActionHistory {
+		if action.Type == "ssh_login" && action.Success {
+			// ssh_login was successful - FORCE ssh_recon if not done
+			reconKey := "ssh_recon:" + action.Target
+			if !completedActions[reconKey] && failedCounts[reconKey] < 1 {
+				decision.Action = "ssh_recon"
+				decision.Target = action.Target
+				decision.Reasoning = "SSH login succeeded - MUST run post-exploitation recon to maximize findings"
+				decision.RiskLevel = "high"
+				break
+			}
+
+			// ssh_recon done? FORCE privesc if not done
+			privescKey := "privesc:" + action.Target
+			if completedActions[reconKey] && !completedActions[privescKey] && failedCounts[privescKey] < 1 {
+				decision.Action = "privesc"
+				decision.Target = action.Target
+				decision.Reasoning = "SSH session established - MUST run privilege escalation to demonstrate full impact"
+				decision.RiskLevel = "critical"
+				break
+			}
+		}
+	}
+
+	// Also force when AI tries to complete (backup check)
 	if decision.Action == "complete" {
 		for _, action := range state.ActionHistory {
 			if action.Type == "ssh_login" && action.Success {
-				// ssh_login was successful, check if we've done ssh_recon
+				// Check ssh_recon first
 				reconKey := "ssh_recon:" + action.Target
 				if !completedActions[reconKey] && failedCounts[reconKey] < 1 {
 					decision.Action = "ssh_recon"
 					decision.Target = action.Target
 					decision.Reasoning = "SSH login succeeded - running post-exploitation recon before completing"
 					decision.RiskLevel = "high"
+					break
+				}
+				// Then check privesc
+				privescKey := "privesc:" + action.Target
+				if !completedActions[privescKey] && failedCounts[privescKey] < 1 {
+					decision.Action = "privesc"
+					decision.Target = action.Target
+					decision.Reasoning = "SSH session established - running privilege escalation scan to find root vectors"
+					decision.RiskLevel = "critical"
 					break
 				}
 			}

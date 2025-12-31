@@ -180,6 +180,8 @@ func (c *Console) execute(line string) {
 		c.cmdAutoPwn(args)
 	case "autopwn-agents", "agents":
 		c.cmdAutoPwnAgents(args)
+	case "train":
+		c.cmdTrain(args)
 	case "history":
 		c.cmdHistory(args)
 	case "report":
@@ -2738,4 +2740,53 @@ func (c *Console) convertScanStateToPentestState(state *ai.ScanState) *ai.Pentes
 		Sessions:        nil, // Not available from ScanState
 		ActionHistory:   state.ActionHistory,
 	}
+}
+
+// cmdTrain runs multiple training iterations
+func (c *Console) cmdTrain(args []string) {
+	if len(args) == 0 {
+		fmt.Printf("%s[-]%s Usage: train <target> [iterations]\n", colorRed, colorReset)
+		fmt.Println("  Example: train localhost 10")
+		fmt.Println("  Example: train 192.168.1.1 20")
+		fmt.Println("\nRuns multiple agents scans to train the AEI (Adaptive Exploitation Intelligence)")
+		return
+	}
+
+	target := args[0]
+	iterations := 10 // default
+
+	if len(args) > 1 {
+		fmt.Sscanf(args[1], "%d", &iterations)
+	}
+
+	fmt.Printf("\n%s%s╔══════════════════════════════════════════════════════════════╗%s\n", colorBold, colorCyan, colorReset)
+	fmt.Printf("%s%s║              AEI TRAINING MODE                               ║%s\n", colorBold, colorCyan, colorReset)
+	fmt.Printf("%s%s╚══════════════════════════════════════════════════════════════╝%s\n\n", colorBold, colorCyan, colorReset)
+
+	fmt.Printf("%s[*]%s Target: %s\n", colorBlue, colorReset, target)
+	fmt.Printf("%s[*]%s Iterations: %d\n", colorBlue, colorReset, iterations)
+	fmt.Printf("%s[*]%s Mode: Turbo (AI parallel)\n\n", colorBlue, colorReset)
+
+	for i := 1; i <= iterations; i++ {
+		fmt.Printf("\n%s%s══════════════════════════════════════════════════════════════%s\n", colorBold, colorYellow, colorReset)
+		fmt.Printf("%s%s  TRAINING ITERATION %d/%d%s\n", colorBold, colorYellow, i, iterations, colorReset)
+		fmt.Printf("%s%s══════════════════════════════════════════════════════════════%s\n\n", colorBold, colorYellow, colorReset)
+
+		// Run agents in turbo mode
+		c.cmdAutoPwnAgents([]string{target, "--turbo"})
+
+		fmt.Printf("\n%s[+]%s Iteration %d complete\n", colorGreen, colorReset, i)
+
+		// Brief pause between iterations
+		if i < iterations {
+			fmt.Printf("%s[*]%s Pausing 3 seconds before next iteration...\n", colorBlue, colorReset)
+			time.Sleep(3 * time.Second)
+		}
+	}
+
+	fmt.Printf("\n%s%s╔══════════════════════════════════════════════════════════════╗%s\n", colorBold, colorGreen, colorReset)
+	fmt.Printf("%s%s║              TRAINING COMPLETE                               ║%s\n", colorBold, colorGreen, colorReset)
+	fmt.Printf("%s%s╚══════════════════════════════════════════════════════════════╝%s\n\n", colorBold, colorGreen, colorReset)
+	fmt.Printf("%s[+]%s Completed %d training iterations on %s\n", colorGreen, colorReset, iterations, target)
+	fmt.Printf("%s[*]%s AEI training data saved to output/training/aei_data.json\n", colorBlue, colorReset)
 }

@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -371,6 +372,32 @@ func (c *Coordinator) runAIExploration(ctx context.Context) error {
 			Service:  cred.Service,
 			Target:   cred.Target,
 		})
+
+		// If SSH credentials were found by other agents, add synthetic ssh_login success
+		// This triggers the AI to run ssh_recon and privesc
+		if strings.HasPrefix(cred.Service, "ssh") && cred.Username != "" && cred.Password != "" {
+			target := cred.Target
+			if target == "" {
+				target = c.state.Target + ":2222"
+			}
+			// Check if we already have an ssh_login for this target
+			hasSSHLogin := false
+			for _, action := range runner.state.ActionHistory {
+				if action.Type == "ssh_login" && action.Target == target {
+					hasSSHLogin = true
+					break
+				}
+			}
+			if !hasSSHLogin {
+				runner.state.ActionHistory = append(runner.state.ActionHistory, Action{
+					Type:    "ssh_login",
+					Target:  target,
+					Success: true,
+					Result:  fmt.Sprintf("SSH credentials found: %s (from auth agent)", cred.Username),
+					Timestamp: time.Now(),
+				})
+			}
+		}
 	}
 	for _, vuln := range c.state.GetVulnerabilities() {
 		runner.state.Vulnerabilities = append(runner.state.Vulnerabilities, vuln)

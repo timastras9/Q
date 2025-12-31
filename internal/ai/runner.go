@@ -29,6 +29,7 @@ type AutoRunner struct {
 	callbacks  RunnerCallbacks
 	running    bool
 	maxActions int
+	aei        *AEI // Adaptive Exploitation Intelligence
 }
 
 type RunnerCallbacks struct {
@@ -52,7 +53,18 @@ func NewAutoRunner(client *ClaudeClient) *AutoRunner {
 			Phase: "initialization",
 		},
 		maxActions: 100, // Default max actions
+		aei:        NewAEI("output/training/aei_data.json"), // Adaptive Exploitation Intelligence
 	}
+}
+
+// SetAEI sets a custom AEI instance (for sharing across agents)
+func (r *AutoRunner) SetAEI(aei *AEI) {
+	r.aei = aei
+}
+
+// GetAEI returns the AEI instance
+func (r *AutoRunner) GetAEI() *AEI {
+	return r.aei
 }
 
 func (r *AutoRunner) SetMaxActions(max int) {
@@ -143,6 +155,20 @@ func (r *AutoRunner) Run(ctx context.Context, target string, scope []string) (*P
 		r.callbacks.OnPhaseChange("reconnaissance")
 	}
 
+	// Start AEI tracking for this run and share with AI
+	if r.aei != nil {
+		ports := make([]int, len(r.state.OpenPorts))
+		for i, p := range r.state.OpenPorts {
+			ports[i] = p.Port
+		}
+		services := make([]string, len(r.state.Services))
+		for i, s := range r.state.Services {
+			services[i] = s.Name
+		}
+		r.aei.StartRun(target, ports, services)
+		r.ai.SetAEI(r.aei) // Share AEI with AI for intelligent decision making
+	}
+
 	actionCount := 0
 
 	for r.running && actionCount < r.maxActions {
@@ -180,7 +206,10 @@ func (r *AutoRunner) Run(ctx context.Context, target string, scope []string) (*P
 			r.callbacks.OnActionStart(decision.Action, decision.Target)
 		}
 
+		actionStart := time.Now()
 		action, err := r.executeAction(ctx, decision)
+		actionDuration := time.Since(actionStart)
+
 		if err != nil {
 			if r.callbacks.OnError != nil {
 				r.callbacks.OnError(err)
@@ -193,12 +222,53 @@ func (r *AutoRunner) Run(ctx context.Context, target string, scope []string) (*P
 			if r.callbacks.OnActionEnd != nil {
 				r.callbacks.OnActionEnd(action.Type, action.Success, action.Result)
 			}
+
+			// Record action outcome for AEI learning
+			if r.aei != nil {
+				findings := 0
+				// Count new findings from this action
+				for _, v := range r.state.Vulnerabilities {
+					if v.Timestamp.After(actionStart) {
+						findings++
+					}
+				}
+				for _, c := range r.state.Credentials {
+					if c.Username != "" || c.Password != "" {
+						// Rough check - credentials don't have timestamps
+						// so we count all as potential findings
+					}
+				}
+				r.aei.RecordAction(action.Type, action.Target, action.Success, actionDuration, findings)
+			}
 		}
 
 		actionCount++
 
 		// Update phase based on progress
 		r.updatePhase()
+	}
+
+	// End AEI tracking and learn from this run
+	if r.aei != nil {
+		// Check if we achieved root access (look for privesc success or root-level findings)
+		reachedRoot := false
+		for _, action := range r.state.ActionHistory {
+			if action.Type == "privesc" && action.Success {
+				// Check if privesc found root vectors
+				if strings.Contains(action.Result, "root") || strings.Contains(action.Result, "SUID") ||
+					strings.Contains(action.Result, "sudo") || strings.Contains(action.Result, "docker") {
+					reachedRoot = true
+					break
+				}
+			}
+		}
+		totalFindings := len(r.state.Vulnerabilities) + len(r.state.Credentials)
+		r.aei.EndRun(reachedRoot, totalFindings)
+
+		// Log AEI stats
+		stats := r.aei.GetStats()
+		fmt.Printf("[AEI] Training data updated: %d total outcomes, %d exploit chains learned\n",
+			stats["total_outcomes"], stats["total_chains"])
 	}
 
 	// Generate final report
@@ -264,6 +334,8 @@ func (r *AutoRunner) executeAction(ctx context.Context, decision *AIDecision) (*
 		return r.actionSSHRecon(ctx, action, decision)
 	case "ssh_pivot":
 		return r.actionSSHPivot(ctx, action, decision)
+	case "privesc", "privilege_escalation":
+		return r.actionPrivesc(ctx, action, decision)
 	case "pivot_scan":
 		return r.actionPivotScan(ctx, action, decision)
 	case "reverse_shell":
@@ -1502,6 +1574,348 @@ func (r *AutoRunner) actionSSHPivot(ctx context.Context, action *Action, decisio
 	action.Data["pivot_port"] = port
 
 	return action, nil
+}
+
+// actionPrivesc performs comprehensive privilege escalation checks after SSH access
+func (r *AutoRunner) actionPrivesc(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	// Parse target
+	target := decision.Target
+	port := "22"
+	if strings.Contains(target, ":") {
+		parts := strings.Split(target, ":")
+		target = parts[0]
+		port = parts[1]
+	}
+
+	// Find SSH credentials from state
+	var username, password string
+	targetKey := fmt.Sprintf("%s:%s", target, port)
+	for _, cred := range r.state.Credentials {
+		if strings.HasPrefix(cred.Service, "ssh") && (cred.Target == targetKey || cred.Target == target || strings.HasPrefix(cred.Target, target)) {
+			username = cred.Username
+			password = cred.Password
+			break
+		}
+	}
+
+	// Allow override from options
+	if user := getOpt(decision.Options, "username"); user != "" {
+		username = user
+	}
+	if pass := getOpt(decision.Options, "password"); pass != "" {
+		password = pass
+	}
+
+	if username == "" || password == "" {
+		action.Result = "Privilege escalation requires SSH credentials - run ssh_login first"
+		action.Success = false
+		return action, nil
+	}
+
+	// Create privesc scanner
+	scanner := exploit.NewPrivescScanner(fmt.Sprintf("%s:%s", target, port), username, password)
+	scanner.SetTimeout(60 * time.Second)
+
+	// Run all checks
+	result, err := scanner.RunAll(ctx)
+	scanner.Close()
+
+	if err != nil {
+		action.Result = fmt.Sprintf("Privilege escalation scan failed: %v", err)
+		action.Success = false
+		return action, err
+	}
+
+	// Build detailed output
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("\n=== PRIVILEGE ESCALATION SCAN: %s@%s:%s ===\n\n", username, target, port))
+
+	// System info
+	if result.SystemInfo != nil {
+		sb.WriteString("--- System Information ---\n")
+		sb.WriteString(fmt.Sprintf("Hostname: %s\n", result.SystemInfo.Hostname))
+		sb.WriteString(fmt.Sprintf("Kernel: %s\n", result.SystemInfo.Kernel))
+		sb.WriteString(fmt.Sprintf("Distro: %s\n", result.SystemInfo.Distro))
+		sb.WriteString(fmt.Sprintf("Arch: %s\n", result.SystemInfo.Architecture))
+		sb.WriteString("\n")
+	}
+
+	// Container info
+	if result.ContainerInfo != nil && result.ContainerInfo.IsContainer {
+		sb.WriteString("--- Container Detection ---\n")
+		sb.WriteString(fmt.Sprintf("Container Type: %s\n", result.ContainerInfo.ContainerType))
+		sb.WriteString(fmt.Sprintf("Privileged: %v\n", result.ContainerInfo.Privileged))
+		sb.WriteString(fmt.Sprintf("Docker Socket: %v\n", result.ContainerInfo.DockerSocket))
+		if len(result.ContainerInfo.EscapeVectors) > 0 {
+			sb.WriteString(fmt.Sprintf("Escape Vectors: %v\n", result.ContainerInfo.EscapeVectors))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Initial privileges
+	sb.WriteString("--- Current Privileges ---\n")
+	sb.WriteString(result.InitialPrivs + "\n\n")
+
+	// Escalation methods found
+	criticalCount := 0
+	highCount := 0
+	if len(result.Methods) > 0 {
+		sb.WriteString("--- ESCALATION VECTORS FOUND ---\n\n")
+		for _, method := range result.Methods {
+			icon := "[+]"
+			if method.Severity == "critical" {
+				icon = "[!!!]"
+				criticalCount++
+			} else if method.Severity == "high" {
+				icon = "[!!]"
+				highCount++
+			}
+
+			sb.WriteString(fmt.Sprintf("%s %s (%s) - %s\n", icon, method.Name, strings.ToUpper(method.Severity), method.Description))
+			if method.Command != "" {
+				sb.WriteString(fmt.Sprintf("    Exploit: %s\n", method.Command))
+			}
+			if method.Output != "" && len(method.Output) < 200 {
+				sb.WriteString(fmt.Sprintf("    Evidence: %s\n", method.Output))
+			}
+			sb.WriteString("\n")
+
+			// Add finding to state
+			finding := Finding{
+				Type:        fmt.Sprintf("privesc_%s", method.Type),
+				Severity:    method.Severity,
+				Target:      targetKey,
+				Service:     "ssh",
+				Description: method.Description,
+				Evidence:    method.Output,
+				Remediation: getPrivescRemediation(method.Type),
+				Timestamp:   time.Now(),
+			}
+			r.state.Vulnerabilities = append(r.state.Vulnerabilities, finding)
+
+			if r.callbacks.OnFinding != nil {
+				r.callbacks.OnFinding(finding)
+			}
+		}
+	}
+
+	// SSH Keys found
+	if len(result.SSHKeys) > 0 {
+		sb.WriteString("--- SSH PRIVATE KEYS FOUND ---\n")
+		for _, key := range result.SSHKeys {
+			sb.WriteString(fmt.Sprintf("  %s (%s) - Passphrase: %v\n", key.Path, key.Type, key.Passphrase))
+
+			// Add as credential
+			cf := CredentialFind{
+				Service:  "ssh_key_extracted",
+				Target:   key.Path,
+				Password: key.PrivateKey,
+			}
+			r.state.Credentials = append(r.state.Credentials, cf)
+
+			if r.callbacks.OnCredential != nil {
+				r.callbacks.OnCredential(cf)
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	// Credentials found
+	if len(result.Credentials) > 0 {
+		sb.WriteString("--- CREDENTIALS HARVESTED ---\n")
+		for _, cred := range result.Credentials {
+			if cred.Hash != "" {
+				sb.WriteString(fmt.Sprintf("  [HASH] %s: %s (from %s)\n", cred.Username, cred.Hash[:min(40, len(cred.Hash))], cred.Source))
+			} else if cred.Password != "" {
+				sb.WriteString(fmt.Sprintf("  [PASS] %s: %s (from %s)\n", cred.Username, cred.Password, cred.Source))
+			}
+
+			// Add as credential
+			cf := CredentialFind{
+				Username: cred.Username,
+				Password: cred.Password,
+				Hash:     cred.Hash,
+				Service:  cred.Source,
+				Target:   targetKey,
+			}
+			r.state.Credentials = append(r.state.Credentials, cf)
+
+			if r.callbacks.OnCredential != nil {
+				r.callbacks.OnCredential(cf)
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	// Sensitive files
+	if len(result.SensitiveFiles) > 0 {
+		sb.WriteString("--- SENSITIVE FILES FOUND ---\n")
+		for _, f := range result.SensitiveFiles {
+			sb.WriteString(fmt.Sprintf("  [%s] %s\n", strings.ToUpper(f.Type), f.Path))
+		}
+		sb.WriteString("\n")
+	}
+
+	// IMPACT DEMONSTRATION - Show the customer what an attacker could actually do
+	if result.Impact != nil {
+		sb.WriteString("\n")
+		sb.WriteString("╔══════════════════════════════════════════════════════════════╗\n")
+		sb.WriteString("║           IMPACT DEMONSTRATION - WHAT AN ATTACKER COULD DO   ║\n")
+		sb.WriteString("╚══════════════════════════════════════════════════════════════╝\n\n")
+
+		if result.Impact.RootAccess {
+			sb.WriteString("🔴 [CRITICAL] ROOT ACCESS OBTAINED!\n")
+			sb.WriteString(fmt.Sprintf("   Method: %s\n", result.Impact.RootMethod))
+			sb.WriteString("   An attacker now has FULL CONTROL of this system.\n\n")
+
+			// Add critical finding
+			finding := Finding{
+				Type:        "root_compromise",
+				Severity:    "critical",
+				Target:      targetKey,
+				Service:     "ssh",
+				Description: fmt.Sprintf("ROOT ACCESS OBTAINED via %s - Complete system compromise", result.Impact.RootMethod),
+				Evidence:    "Demonstrated ability to execute commands as root",
+				Remediation: "Immediately revoke compromised credentials, audit all system access, implement privilege separation",
+				Timestamp:   time.Now(),
+			}
+			r.state.Vulnerabilities = append(r.state.Vulnerabilities, finding)
+			if r.callbacks.OnFinding != nil {
+				r.callbacks.OnFinding(finding)
+			}
+		}
+
+		// Data Exfiltration
+		if len(result.Impact.DataExfiltrated) > 0 {
+			sb.WriteString("📤 DATA THAT COULD BE EXFILTRATED:\n")
+			for _, data := range result.Impact.DataExfiltrated {
+				sb.WriteString(fmt.Sprintf("   [%s] %s - %d records (%s)\n",
+					strings.ToUpper(data.Severity), data.Source, data.RecordCount, data.Type))
+			}
+			sb.WriteString("\n")
+		}
+
+		// Cloud Access
+		if len(result.Impact.CloudAccess) > 0 {
+			sb.WriteString("☁️  CLOUD ACCESS COMPROMISED:\n")
+			for _, cloud := range result.Impact.CloudAccess {
+				sb.WriteString(fmt.Sprintf("   [%s] %s credentials found\n", strings.ToUpper(cloud.Provider), cloud.Type))
+				for _, resource := range cloud.Resources {
+					sb.WriteString(fmt.Sprintf("      → %s\n", resource))
+				}
+
+				// Add finding for cloud access
+				finding := Finding{
+					Type:        fmt.Sprintf("cloud_%s_compromise", cloud.Provider),
+					Severity:    "critical",
+					Target:      targetKey,
+					Service:     cloud.Provider,
+					Description: fmt.Sprintf("%s cloud credentials discovered - potential access to cloud infrastructure", strings.ToUpper(cloud.Provider)),
+					Remediation: fmt.Sprintf("Rotate %s credentials immediately, enable MFA, review IAM policies", cloud.Provider),
+					Timestamp:   time.Now(),
+				}
+				r.state.Vulnerabilities = append(r.state.Vulnerabilities, finding)
+				if r.callbacks.OnFinding != nil {
+					r.callbacks.OnFinding(finding)
+				}
+			}
+			sb.WriteString("\n")
+		}
+
+		// Lateral Movement
+		if len(result.Impact.LateralMovement) > 0 {
+			sb.WriteString("🔀 LATERAL MOVEMENT TARGETS:\n")
+			shown := 0
+			for _, target := range result.Impact.LateralMovement {
+				if shown < 10 {
+					sb.WriteString(fmt.Sprintf("   → %s (via %s)\n", target.Host, target.Method))
+					shown++
+				}
+			}
+			if len(result.Impact.LateralMovement) > 10 {
+				sb.WriteString(fmt.Sprintf("   ... and %d more potential targets\n", len(result.Impact.LateralMovement)-10))
+			}
+			sb.WriteString("\n")
+		}
+
+		// Persistence
+		if len(result.Impact.PersistenceMethods) > 0 {
+			sb.WriteString("🚪 PERSISTENCE METHODS AVAILABLE:\n")
+			for _, method := range result.Impact.PersistenceMethods {
+				sb.WriteString(fmt.Sprintf("   ⚠ %s\n", method))
+			}
+			sb.WriteString("\n")
+		}
+
+		// Proof of Compromise
+		if result.Impact.ProofOfCompromise != "" {
+			sb.WriteString("📋 PROOF OF COMPROMISE:\n")
+			sb.WriteString(fmt.Sprintf("   %s\n\n", result.Impact.ProofOfCompromise))
+		}
+
+		// Risk Summary
+		if result.Impact.RiskSummary != "" {
+			sb.WriteString("\n")
+			sb.WriteString(result.Impact.RiskSummary)
+		}
+	}
+
+	// Summary
+	sb.WriteString("\n=== SUMMARY ===\n")
+	sb.WriteString(fmt.Sprintf("Escalation Vectors: %d (%d critical, %d high)\n", len(result.Methods), criticalCount, highCount))
+	sb.WriteString(fmt.Sprintf("SSH Keys Found: %d\n", len(result.SSHKeys)))
+	sb.WriteString(fmt.Sprintf("Credentials Harvested: %d\n", len(result.Credentials)))
+	sb.WriteString(fmt.Sprintf("Sensitive Files: %d\n", len(result.SensitiveFiles)))
+	if result.Impact != nil {
+		sb.WriteString(fmt.Sprintf("Lateral Movement Targets: %d\n", len(result.Impact.LateralMovement)))
+		sb.WriteString(fmt.Sprintf("Cloud Accounts at Risk: %d\n", len(result.Impact.CloudAccess)))
+		sb.WriteString(fmt.Sprintf("Persistence Methods: %d\n", len(result.Impact.PersistenceMethods)))
+	}
+	sb.WriteString(fmt.Sprintf("Scan Duration: %v\n", result.Duration))
+
+	if result.RootObtained {
+		sb.WriteString("\n🔴🔴🔴 ROOT ACCESS CONFIRMED - SYSTEM FULLY COMPROMISED 🔴🔴🔴\n")
+	} else if result.Success {
+		sb.WriteString("\n[!!!] ROOT ESCALATION LIKELY POSSIBLE!\n")
+	}
+
+	action.Result = sb.String()
+	action.Success = len(result.Methods) > 0 || result.RootObtained
+	action.Data["escalation_methods"] = len(result.Methods)
+	action.Data["critical_vectors"] = criticalCount
+	action.Data["ssh_keys"] = len(result.SSHKeys)
+	action.Data["credentials"] = len(result.Credentials)
+	action.Data["can_escalate"] = result.Success
+	action.Data["root_obtained"] = result.RootObtained
+	if result.Impact != nil {
+		action.Data["lateral_targets"] = len(result.Impact.LateralMovement)
+		action.Data["cloud_accounts"] = len(result.Impact.CloudAccess)
+		action.Data["data_exfiltrated"] = len(result.Impact.DataExfiltrated)
+	}
+
+	return action, nil
+}
+
+// getPrivescRemediation returns remediation advice for privesc findings
+func getPrivescRemediation(methodType string) string {
+	remediations := map[string]string{
+		"sudo_nopasswd":      "Remove NOPASSWD entries from sudoers, use principle of least privilege",
+		"sudo_cached":        "Reduce sudo timestamp_timeout, require password for sensitive commands",
+		"suid_binary":        "Remove unnecessary SUID bits, audit SUID binaries regularly",
+		"docker_socket":      "Restrict Docker socket access, use rootless Docker or Podman",
+		"docker_access":      "Remove users from docker group unless necessary, use Docker authorization plugins",
+		"container_escape":   "Avoid privileged containers, use seccomp/AppArmor profiles, don't mount host paths",
+		"writable_path":      "Fix PATH directory permissions, ensure only root can write to PATH directories",
+		"writable_passwd":    "Fix /etc/passwd permissions to 644 owned by root",
+		"kernel_exploit":     "Keep kernel updated, use kernel hardening (grsecurity, SELinux)",
+		"ssh_key_found":      "Protect SSH keys with strong passphrases, use hardware tokens",
+		"cron_writable":      "Fix cron script permissions, use absolute paths in cron jobs",
+	}
+
+	if rem, ok := remediations[methodType]; ok {
+		return rem
+	}
+	return "Review and harden system configuration"
 }
 
 // actionPivotScan performs deep port scanning on discovered internal hosts via SSH

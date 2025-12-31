@@ -812,27 +812,32 @@ func (a *PostExploitAgent) Run(ctx context.Context) error {
 		a.sshRecon(ctx)
 	}
 
-	// Step 3: SSH pivot to discover internal networks
+	// Step 3: Privilege escalation scan via SSH
+	if a.canContinue() {
+		a.privescScan(ctx)
+	}
+
+	// Step 4: SSH pivot to discover internal networks
 	if a.canContinue() {
 		a.sshPivot(ctx)
 	}
 
-	// Step 4: Pivot scan internal hosts
+	// Step 5: Pivot scan internal hosts
 	if a.canContinue() {
 		a.pivotScan(ctx)
 	}
 
-	// Step 5: Database enumeration
+	// Step 6: Database enumeration
 	if a.canContinue() {
 		a.dbEnum(ctx)
 	}
 
-	// Step 6: Crack any discovered hashes
+	// Step 7: Crack any discovered hashes
 	if a.canContinue() {
 		a.crackHashes(ctx)
 	}
 
-	// Step 7: Check Docker registry if port 5000 is open
+	// Step 8: Check Docker registry if port 5000 is open
 	if a.canContinue() {
 		a.dockerRegistryCheck(ctx)
 	}
@@ -944,6 +949,61 @@ func (a *PostExploitAgent) sshRecon(ctx context.Context) {
 			Severity:    "critical",
 			Target:      target,
 			Description: "SSH shell obtained - post-exploitation recon completed",
+			Evidence:    result.Result,
+			Timestamp:   time.Now(),
+		})
+	}
+}
+
+func (a *PostExploitAgent) privescScan(ctx context.Context) {
+	// Check if we have SSH credentials
+	var sshCreds []Credential
+	var sshPort string = "22"
+	for _, c := range a.state.GetCredentials() {
+		if strings.HasPrefix(c.Service, "ssh") && c.Username != "" && c.Password != "" {
+			sshCreds = append(sshCreds, c)
+			if parts := strings.Split(c.Service, ":"); len(parts) == 2 {
+				sshPort = parts[1]
+			}
+		}
+	}
+
+	if len(sshCreds) == 0 {
+		return
+	}
+
+	target := fmt.Sprintf("%s:%s", a.state.Target, sshPort)
+	actionKey := "privesc:" + target
+
+	if a.state.IsActionDone(actionKey) {
+		return
+	}
+
+	a.reportAction("privesc", target)
+	a.actions++
+
+	// Use runner's privesc action for comprehensive privilege escalation scanning
+	opts := map[string]interface{}{
+		"port":     sshPort,
+		"username": sshCreds[0].Username,
+		"password": sshCreds[0].Password,
+	}
+	result, err := a.executeAction(ctx, "privesc", target, opts)
+	if err != nil {
+		a.state.MarkActionFailed(actionKey)
+		return
+	}
+
+	a.state.MarkActionComplete(actionKey)
+
+	// Findings and credentials are processed in executeAction
+	// Report overall privesc success
+	if result != nil && result.Success {
+		a.reportFinding(Finding{
+			Type:        "privilege_escalation_vectors",
+			Severity:    "critical",
+			Target:      target,
+			Description: "Privilege escalation vectors discovered via SSH",
 			Evidence:    result.Result,
 			Timestamp:   time.Now(),
 		})

@@ -82,8 +82,8 @@ func DefaultPorts() []int {
 	return []int{
 		21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 143, 389, 443, 445, 993, 995,
 		1433, 1521, 1723, 2222, 3000, 3306, 3389, 5000, 5432, 5601, 5900, 5985,
-		6379, 8000, 8080, 8081, 8082, 8083, 8084, 8085, 8443, 8888, 8922, 8929,
-		9090, 9200, 11211, 22022, 27017,
+		6379, 6443, 8000, 8080, 8081, 8082, 8083, 8084, 8085, 8169, 8443, 8888,
+		8922, 8929, 9090, 9200, 10250, 11211, 22022, 27017,
 	}
 }
 
@@ -578,9 +578,12 @@ func identifyService(port int) Service {
 		8083:  {Name: "http-vuln", Product: "Legacy PHP"}, // Vulnerable PHP app
 		8084:  {Name: "http-tomcat", Product: "Tomcat"},   // Tomcat
 		8085:  {Name: "http-wireless", Product: "Wireless Sim"},
+		8169:  {Name: "http-cloud-meta", Product: "Cloud Metadata"},
 		8443:  {Name: "https-alt"},
 		8922:  {Name: "ssh-gitlab"},
 		8929:  {Name: "http-gitlab", Product: "GitLab"},
+		6443:  {Name: "kubernetes-api", Product: "Kubernetes API"},
+		10250: {Name: "kubelet", Product: "Kubelet API"},
 		22022: {Name: "ssh"}, // Common alternate SSH port
 		27017: {Name: "mongodb"},
 	}
