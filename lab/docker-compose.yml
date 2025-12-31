@@ -215,15 +215,18 @@ services:
   # ============================================
 
   # SSH with weak credentials
+  # Vulnerable SSH server with multiple privesc vectors
   ssh-server:
-    image: linuxserver/openssh-server
+    build:
+      context: ./services/vulnerable-ssh
+      dockerfile: Dockerfile
     container_name: lab-ssh
     ports:
-      - "2222:2222"
-    environment:
-      - USER_NAME=admin
-      - USER_PASSWORD=admin123
-      - PASSWORD_ACCESS=true
+      - "2222:22"
+    volumes:
+      # Mount Docker socket for container escape demonstration
+      - /var/run/docker.sock:/var/run/docker.sock
+    privileged: true  # Enables additional escape vectors
     restart: unless-stopped
 
   # FTP with anonymous access
@@ -559,6 +562,353 @@ services:
       - "593:593"
     restart: unless-stopped
 
+  # ============================================
+  # TIER 9: FAMOUS CVE EXPLOITS
+  # ============================================
+
+  # Log4Shell Vulnerable Service (CVE-2021-44228)
+  # The most famous Java vulnerability - RCE via JNDI injection
+  log4shell:
+    build:
+      context: ./services/log4shell
+      dockerfile: Dockerfile
+    container_name: lab-log4shell
+    ports:
+      - "8090:8090"
+    restart: unless-stopped
+
+  # Shellshock Vulnerable CGI (CVE-2014-6271)
+  # Classic Bash vulnerability - RCE via environment variables
+  shellshock:
+    build:
+      context: ./services/shellshock
+      dockerfile: Dockerfile
+    container_name: lab-shellshock
+    ports:
+      - "8093:80"
+    restart: unless-stopped
+
+  # Apache Struts RCE Simulation (CVE-2017-5638)
+  # Content-Type OGNL injection - caused the Equifax breach
+  struts-vuln:
+    build:
+      context: ./services/struts
+      dockerfile: Dockerfile
+    container_name: lab-struts
+    ports:
+      - "8091:8091"
+    restart: unless-stopped
+
+  # Deserialization Vulnerabilities (CWE-502)
+  # Multiple deserialization vulns: Pickle, YAML, XXE, Eval
+  deserialize-vuln:
+    build:
+      context: ./services/deserialize
+      dockerfile: Dockerfile
+    container_name: lab-deserialize
+    ports:
+      - "8092:8092"
+    restart: unless-stopped
+
+  # PHPMyAdmin with default credentials
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: lab-phpmyadmin
+    ports:
+      - "8094:80"
+    environment:
+      - PMA_HOST=mysql
+      - PMA_USER=root
+      - PMA_PASSWORD=root123
+    depends_on:
+      - mysql
+    restart: unless-stopped
+
+  # Adminer (simpler DB admin, also common target)
+  adminer:
+    image: adminer:4.8.1
+    container_name: lab-adminer
+    ports:
+      - "8095:8080"
+    restart: unless-stopped
+
+  # Spring Boot Actuator (exposed endpoints, info leak, RCE potential)
+  spring-actuator:
+    image: python:3.9-slim
+    container_name: lab-spring-actuator
+    ports:
+      - "8096:8096"
+    command: >
+      sh -c "pip install flask && python -c \"
+      from flask import Flask, jsonify
+      import os, socket
+
+      app = Flask(__name__)
+
+      @app.route('/')
+      def index():
+          return '<h1>Employee API</h1><p>Spring Boot 2.3.0</p><a href=\"/actuator\">Actuator</a>'
+
+      @app.route('/actuator')
+      def actuator():
+          return jsonify({
+              '_links': {
+                  'self': {'href': '/actuator'},
+                  'health': {'href': '/actuator/health'},
+                  'info': {'href': '/actuator/info'},
+                  'env': {'href': '/actuator/env'},
+                  'mappings': {'href': '/actuator/mappings'},
+                  'heapdump': {'href': '/actuator/heapdump'},
+                  'jolokia': {'href': '/actuator/jolokia'}
+              }
+          })
+
+      @app.route('/actuator/health')
+      def health():
+          return jsonify({'status': 'UP'})
+
+      @app.route('/actuator/env')
+      def env():
+          return jsonify({
+              'activeProfiles': ['prod'],
+              'propertySources': [
+                  {'name': 'systemEnvironment', 'properties': {
+                      'AWS_ACCESS_KEY_ID': {'value': 'AKIAIOSFODNN7EXAMPLE'},
+                      'AWS_SECRET_ACCESS_KEY': {'value': 'wJalrXUtnFEMI/K7MDENG/bPxRfiCY'},
+                      'DATABASE_URL': {'value': 'mysql://root:root123@mysql:3306/prod'},
+                      'JWT_SECRET': {'value': 'super-secret-jwt-key-2024'},
+                      'STRIPE_API_KEY': {'value': 'sk_live_51234567890abcdef'}
+                  }}
+              ]
+          })
+
+      @app.route('/actuator/info')
+      def info():
+          return jsonify({
+              'app': {'name': 'employee-api', 'version': '2.3.0'},
+              'git': {'commit': 'abc123', 'branch': 'main'},
+              'build': {'artifact': 'employee-api', 'group': 'com.corp'}
+          })
+
+      @app.route('/actuator/mappings')
+      def mappings():
+          return jsonify({
+              'contexts': {
+                  'application': {
+                      'mappings': {
+                          '/api/admin/users': {'methods': ['GET', 'POST', 'DELETE']},
+                          '/api/admin/config': {'methods': ['GET', 'PUT']},
+                          '/api/internal/debug': {'methods': ['GET']},
+                          '/api/v1/employees': {'methods': ['GET', 'POST']}
+                      }
+                  }
+              }
+          })
+
+      if __name__ == '__main__':
+          app.run(host='0.0.0.0', port=8096)
+      \"
+      "
+    restart: unless-stopped
+
+  # JNDI/LDAP Server for Log4Shell exploitation
+  jndi-server:
+    image: python:3.9-slim
+    container_name: lab-jndi
+    ports:
+      - "1389:1389"
+      - "8180:8180"
+    command: >
+      sh -c "pip install ldap3 flask && python -c \"
+      from flask import Flask
+      import threading
+      import socket
+
+      app = Flask(__name__)
+
+      @app.route('/Exploit.class')
+      def exploit_class():
+          # Returns fake Java class that would execute commands
+          return b'CAFEBABE00000034'
+
+      @app.route('/callback')
+      def callback():
+          return 'JNDI callback received - RCE successful!'
+
+      def fake_ldap():
+          sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+          sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+          sock.bind(('0.0.0.0', 1389))
+          sock.listen(5)
+          print('Fake LDAP server on 1389')
+          while True:
+              try:
+                  conn, addr = sock.accept()
+                  print(f'LDAP connection from {addr}')
+                  # Send LDAP response pointing to HTTP server
+                  response = b'\\x30\\x0c\\x02\\x01\\x01\\x61\\x07\\x0a\\x01\\x00\\x04\\x00\\x04\\x00'
+                  conn.send(response)
+                  conn.close()
+              except: pass
+
+      threading.Thread(target=fake_ldap, daemon=True).start()
+      app.run(host='0.0.0.0', port=8180)
+      \"
+      "
+    restart: unless-stopped
+
+  # ProFTPd with mod_copy (CVE-2015-3306)
+  proftpd-vuln:
+    image: alpine:3.18
+    container_name: lab-proftpd
+    ports:
+      - "2121:21"
+    command: >
+      sh -c "apk add --no-cache proftpd &&
+             echo 'ServerName \"ProFTPD Vulnerable Server\"' > /etc/proftpd/proftpd.conf &&
+             echo 'ServerType standalone' >> /etc/proftpd/proftpd.conf &&
+             echo 'Port 21' >> /etc/proftpd/proftpd.conf &&
+             echo 'Umask 022' >> /etc/proftpd/proftpd.conf &&
+             echo 'MaxInstances 30' >> /etc/proftpd/proftpd.conf &&
+             echo 'User nobody' >> /etc/proftpd/proftpd.conf &&
+             echo 'Group nogroup' >> /etc/proftpd/proftpd.conf &&
+             echo '<Anonymous /var/ftp>' >> /etc/proftpd/proftpd.conf &&
+             echo '  User ftp' >> /etc/proftpd/proftpd.conf &&
+             echo '  Group ftp' >> /etc/proftpd/proftpd.conf &&
+             echo '  UserAlias anonymous ftp' >> /etc/proftpd/proftpd.conf &&
+             echo '  RequireValidShell off' >> /etc/proftpd/proftpd.conf &&
+             echo '  <Directory *>' >> /etc/proftpd/proftpd.conf &&
+             echo '    <Limit WRITE>' >> /etc/proftpd/proftpd.conf &&
+             echo '      AllowAll' >> /etc/proftpd/proftpd.conf &&
+             echo '    </Limit>' >> /etc/proftpd/proftpd.conf &&
+             echo '  </Directory>' >> /etc/proftpd/proftpd.conf &&
+             echo '</Anonymous>' >> /etc/proftpd/proftpd.conf &&
+             mkdir -p /var/ftp && chmod 777 /var/ftp &&
+             echo 'SECRET_KEY=admin_password_123' > /var/ftp/config.txt &&
+             adduser -D ftp &&
+             proftpd -n"
+    restart: unless-stopped
+
+  # Memcached (no auth, often exposed)
+  memcached:
+    image: memcached:1.6-alpine
+    container_name: lab-memcached
+    ports:
+      - "11211:11211"
+    restart: unless-stopped
+
+  # CouchDB (weak auth)
+  couchdb:
+    image: apache/couchdb:3.3
+    container_name: lab-couchdb
+    ports:
+      - "5984:5984"
+    environment:
+      - COUCHDB_USER=admin
+      - COUCHDB_PASSWORD=admin
+    restart: unless-stopped
+
+  # RabbitMQ (default creds: guest/guest)
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: lab-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    restart: unless-stopped
+
+  # ============================================
+  # TIER 10: CLOUD METADATA SIMULATION
+  # ============================================
+  # Simulates AWS/GCP/Azure metadata services for SSRF training
+  # In real pentests, these would be accessed via SSRF vulnerabilities
+
+  cloud-metadata:
+    build:
+      context: ./services/cloud-metadata
+      dockerfile: Dockerfile
+    container_name: lab-cloud-metadata
+    ports:
+      - "8169:80"  # Simulates 169.254.169.254
+    restart: unless-stopped
+
+  # Kubernetes API simulation (often exposed accidentally)
+  k8s-api-sim:
+    image: python:3.9-slim
+    container_name: lab-k8s-api
+    ports:
+      - "6443:6443"
+      - "10250:10250"
+    command: >
+      sh -c "pip install flask && python -c \"
+      from flask import Flask, jsonify
+      app = Flask(__name__)
+
+      @app.route('/api')
+      def api():
+          return jsonify({'versions': ['v1']})
+
+      @app.route('/api/v1')
+      def api_v1():
+          return jsonify({
+              'resources': [
+                  {'name': 'pods', 'namespaced': True},
+                  {'name': 'secrets', 'namespaced': True},
+                  {'name': 'configmaps', 'namespaced': True},
+                  {'name': 'services', 'namespaced': True}
+              ]
+          })
+
+      @app.route('/api/v1/namespaces/kube-system/secrets')
+      def kube_system_secrets():
+          return jsonify({
+              'items': [{
+                  'metadata': {'name': 'admin-token-xxxxx'},
+                  'data': {
+                      'token': 'ZXlKaGJHY2lPaUpTVXpJMU5pSXNJblI1Y0NJNklrcFhWQ0o5LmV5SnBjM01pT2lKcmRXSmxjbTVsZEdWekwzTmxjblpwWTJWaFkyTnZkVzUwSWl3aWEzVmlaWEp1WlhSbGN5NXBieTl6WlhKMmFXTmxZV05qYjNWdWRDOXVZVzFsYzNCaFkyVWlPaUpyZFdKbExYTjVjM1JsYlNJc0ltdDFZbVZ5Ym1WMFpYTXVhVzh2YzJWeWRtbGpaV0ZqWTI5MWJuUXZjMlZqY21WMExtNWhiV1VpT2lKaFpHMXBiaTEwYjJ0bGJpMTRlSGg0ZUNJc0ltdDFZbVZ5Ym1WMFpYTXVhVzh2YzJWeWRtbGpaV0ZqWTI5MWJuUXZjMlZ5ZG1salpTMWhZMk52ZFc1MExtNWhiV1VpT2lKaFpHMXBiaUlzSW10MVltVnlibVYwWlhNdWFXOHZjMlZ5ZG1salpXRmpZMjkxYm5RdmMyVnlkbWxqWlMxaFkyTnZkVzUwTG5WcFpDSTZJakV5TXpRMU5qYzRMVEV5TXpRdE1USXpOQzB4TWpNMExURXlNelExTmpjNE9XRmlZeUlzSW5OMVlpSTZJbk41YzNSbGJUcHpaWEoyYVdObFlXTmpiM1Z1ZERwcmRXSmxMWE41YzNSbGJUcGhaRzFwYmlKOS5TSUdOQVRVUkU='
+                  }
+              }]
+          })
+
+      @app.route('/api/v1/namespaces/default/pods')
+      def default_pods():
+          return jsonify({
+              'items': [{
+                  'metadata': {'name': 'web-app-7d8f9c6b5-xxxxx', 'namespace': 'default'},
+                  'spec': {
+                      'containers': [{
+                          'name': 'web',
+                          'image': 'company/web-app:v1.2.3',
+                          'env': [
+                              {'name': 'DATABASE_URL', 'value': 'postgres://admin:secret@db:5432/app'},
+                              {'name': 'API_KEY', 'value': 'sk-prod-xxxxxxxxxxxx'}
+                          ]
+                      }]
+                  }
+              }]
+          })
+
+      @app.route('/healthz')
+      def healthz():
+          return 'ok'
+
+      if __name__ == '__main__':
+          import ssl
+          context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+          context.check_hostname = False
+          context.verify_mode = ssl.CERT_NONE
+          # Generate self-signed cert on the fly
+          import subprocess
+          subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-keyout', '/tmp/key.pem', '-out', '/tmp/cert.pem', '-days', '365', '-nodes', '-subj', '/CN=kubernetes'], capture_output=True)
+          context.load_cert_chain('/tmp/cert.pem', '/tmp/key.pem')
+          app.run(host='0.0.0.0', port=6443, ssl_context=context)
+      \"
+      "
+    restart: unless-stopped
+
   # Sun RPC (ONC RPC) - Classic Unix RPC
   sunrpc:
     image: alpine:3.18
@@ -579,6 +929,20 @@ services:
     volumes:
       - sunrpc_share:/share
     restart: unless-stopped
+
+  # ============================================
+  # SSRF VULNERABLE SERVICE FOR TESTING
+  # ============================================
+  ssrf-vuln:
+    build:
+      context: ./services/ssrf-vuln
+      dockerfile: Dockerfile
+    container_name: lab-ssrf-vuln
+    ports:
+      - "8094:8094"
+    restart: unless-stopped
+    networks:
+      - default
 
 volumes:
   wireless_captures:
