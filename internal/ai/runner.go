@@ -123,6 +123,38 @@ func getOpt(opts map[string]interface{}, key string) string {
 	return ""
 }
 
+// setModuleOptionsFromURL parses a URL and sets RHOSTS, RPORT, SSL, TARGETURI on the module
+func setModuleOptionsFromURL(module exploit.Exploit, targetURL string) {
+	ssl := strings.HasPrefix(targetURL, "https://")
+	url := strings.TrimPrefix(targetURL, "http://")
+	url = strings.TrimPrefix(url, "https://")
+
+	// Extract path
+	path := "/"
+	if idx := strings.Index(url, "/"); idx > 0 {
+		path = url[idx:]
+		url = url[:idx]
+	}
+
+	// Extract host and port
+	host := url
+	port := "80"
+	if ssl {
+		port = "443"
+	}
+	if idx := strings.Index(url, ":"); idx > 0 {
+		host = url[:idx]
+		port = url[idx+1:]
+	}
+
+	module.SetOption("RHOSTS", host)
+	module.SetOption("RPORT", port)
+	if ssl {
+		module.SetOption("SSL", "true")
+	}
+	module.SetOption("TARGETURI", path)
+}
+
 // extractHost extracts just the hostname from a target string (removes protocol, port, path)
 func extractHost(target string) string {
 	t := target
@@ -4703,7 +4735,7 @@ func (r *AutoRunner) actionSSRFScan(ctx context.Context, action *Action, decisio
 		target = r.state.Target
 	}
 
-	module.SetOption("URL", target)
+	setModuleOptionsFromURL(module, target)
 
 	result, err := module.Run(ctx)
 	if err != nil {
@@ -4751,7 +4783,7 @@ func (r *AutoRunner) actionJWTScan(ctx context.Context, action *Action, decision
 		target = r.state.Target
 	}
 
-	module.SetOption("URL", target)
+	setModuleOptionsFromURL(module, target)
 
 	if token := getOpt(decision.Options, "token"); token != "" {
 		module.SetOption("TOKEN", token)
@@ -4803,7 +4835,7 @@ func (r *AutoRunner) actionOAuthScan(ctx context.Context, action *Action, decisi
 		target = r.state.Target
 	}
 
-	module.SetOption("URL", target)
+	setModuleOptionsFromURL(module, target)
 
 	result, err := module.Run(ctx)
 	if err != nil {
@@ -4851,7 +4883,7 @@ func (r *AutoRunner) actionGraphQLScan(ctx context.Context, action *Action, deci
 		target = r.state.Target
 	}
 
-	module.SetOption("URL", target)
+	setModuleOptionsFromURL(module, target)
 
 	result, err := module.Run(ctx)
 	if err != nil {
@@ -4899,7 +4931,7 @@ func (r *AutoRunner) actionWebSocketScan(ctx context.Context, action *Action, de
 		target = r.state.Target
 	}
 
-	module.SetOption("URL", target)
+	setModuleOptionsFromURL(module, target)
 
 	result, err := module.Run(ctx)
 	if err != nil {
@@ -5014,7 +5046,7 @@ func (r *AutoRunner) actionTechFingerprint(ctx context.Context, action *Action, 
 		target = "http://" + target
 	}
 
-	module.SetOption("URL", target)
+	setModuleOptionsFromURL(module, target)
 
 	result, err := module.Run(ctx)
 	if err != nil {
