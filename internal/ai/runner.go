@@ -169,6 +169,9 @@ func (r *AutoRunner) Run(ctx context.Context, target string, scope []string) (*P
 		r.ai.SetAEI(r.aei) // Share AEI with AI for intelligent decision making
 	}
 
+	// Run forced initial scans with new modules on detected web ports
+	r.runForcedWebScans(ctx, target)
+
 	actionCount := 0
 
 	for r.running && actionCount < r.maxActions {
@@ -4966,4 +4969,65 @@ func (r *AutoRunner) actionTechFingerprint(ctx context.Context, action *Action, 
 	}
 
 	return action, nil
+}
+
+// runForcedWebScans runs new advanced modules on all detected web ports
+func (r *AutoRunner) runForcedWebScans(ctx context.Context, target string) {
+	// Common web ports to scan
+	webPorts := []int{80, 443, 3000, 8080, 8443, 8888}
+
+	// New modules to force-run on each web port
+	webModules := []string{
+		"tech_fingerprint",
+		"ssrf_scan",
+		"jwt_scan",
+		"graphql_scan",
+		"websocket_scan",
+	}
+
+	for _, port := range webPorts {
+		// Check if port is in open ports
+		portOpen := false
+		for _, p := range r.state.OpenPorts {
+			if p.Port == port {
+				portOpen = true
+				break
+			}
+		}
+		if !portOpen {
+			continue
+		}
+
+		// Build URL
+		scheme := "http"
+		if port == 443 || port == 8443 {
+			scheme = "https"
+		}
+		url := fmt.Sprintf("%s://%s:%d", scheme, target, port)
+
+		// Run each module
+		for _, module := range webModules {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			decision := AIDecision{
+				Action:    module,
+				Target:    url,
+				Reasoning: fmt.Sprintf("Forced scan: %s on port %d", module, port),
+				RiskLevel: "low",
+			}
+
+			if r.callbacks.OnActionStart != nil {
+				r.callbacks.OnActionStart(module, url)
+			}
+
+			action, _ := r.executeAction(ctx, &decision)
+			if action != nil {
+				r.state.ActionHistory = append(r.state.ActionHistory, *action)
+			}
+		}
+	}
 }

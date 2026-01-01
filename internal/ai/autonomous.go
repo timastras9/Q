@@ -980,6 +980,12 @@ func (a *AutoPentester) findAlternativeAction(state *PentestState, current *AIDe
 	}{
 		{"cmd_inject", []int{8080, 80, 3000, 8443}, "http://", "Trying command injection on web service"},
 		{"sqli", []int{8080, 80, 3000}, "http://", "Trying SQL injection on web service"},
+		{"ssrf_scan", []int{8080, 80, 3000, 8443}, "http://", "Testing for SSRF vulnerabilities"},
+		{"jwt_scan", []int{8080, 80, 3000, 8443}, "http://", "Testing for JWT vulnerabilities"},
+		{"graphql_scan", []int{8080, 80, 3000, 8443}, "http://", "Testing for GraphQL vulnerabilities"},
+		{"websocket_scan", []int{8080, 80, 3000, 8888}, "http://", "Testing WebSocket security"},
+		{"oauth_scan", []int{8080, 80, 3000, 8443}, "http://", "Testing OAuth/OIDC security"},
+		{"tech_fingerprint", []int{8080, 80, 3000, 8443}, "http://", "Fingerprinting web technologies"},
 		{"dir_bruteforce", []int{8080, 80, 3000}, "http://", "Bruteforcing directories on web service"},
 		{"ssh_login", []int{22, 2222, 22022}, "", "Trying SSH credential check"},
 		{"banner_grab", []int{21, 22, 25, 110, 143}, "", "Grabbing service banners for version info"},
