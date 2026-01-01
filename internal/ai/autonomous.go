@@ -471,6 +471,16 @@ NOTE: Do NOT try mysql_check or postgres_check yet - these require credentials!
 - dir_scan: Find hidden paths (target=http://ip:port)
 - api_fuzz: API endpoint discovery (target=http://ip:port)
 - xss_scan: Cross-site scripting (target=http://ip:port)
+- ssrf_scan: SSRF with bypass techniques (target=http://ip:port) - cloud metadata extraction!
+- jwt_scan: JWT vulnerabilities (target=http://ip:port) - none alg, weak secrets, key confusion!
+- oauth_scan: OAuth/OIDC misconfig (target=http://ip:port) - redirect URI, implicit flow issues!
+- graphql_scan: GraphQL introspection/injection (target=http://ip:port/graphql) - schema leak, DoS!
+- websocket_scan: WebSocket hijacking (target=http://ip:port) - CSWSH, origin validation!
+- tech_fingerprint: Technology detection (target=http://ip:port) - CMS, frameworks, security headers!
+
+=== PRIORITY 3B: RECON/OSINT ===
+- dns_enum: DNS enumeration (target=domain) - CT logs, subdomain brute force, zone transfer!
+- asn_lookup: ASN/WHOIS lookup (target=ip or domain) - scope expansion, related IPs!
 
 === PRIORITY 4: SSL/TLS SECURITY (test EVERY https port!) ===
 - ssl_scan: CRITICAL! Full SSL/TLS vulnerability scanner (target=ip:443) - checks:
@@ -587,6 +597,10 @@ Reply with JSON only:
 		"xmlrpc_exploit": true, "jsonrpc_exploit": true, "rmi_exploit": true,
 		"rpcbind_scan": true, "nfs_exploit": true, "grpc_exploit": true,
 		"msrpc_scan": true,
+		// New advanced scanners
+		"ssrf_scan": true, "jwt_scan": true, "oauth_scan": true,
+		"graphql_scan": true, "websocket_scan": true, "tech_fingerprint": true,
+		"dns_enum": true, "asn_lookup": true,
 	}
 	if !validActions[decision.Action] {
 		decision.Action = "complete"
