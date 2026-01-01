@@ -403,6 +403,23 @@ func (r *AutoRunner) executeAction(ctx context.Context, decision *AIDecision) (*
 		return r.actionDNSZoneTransfer(ctx, action, decision)
 	case "banner_grab":
 		return r.actionBannerGrab(ctx, action, decision)
+	// New advanced scanners
+	case "ssrf_scan":
+		return r.actionSSRFScan(ctx, action, decision)
+	case "jwt_scan":
+		return r.actionJWTScan(ctx, action, decision)
+	case "oauth_scan":
+		return r.actionOAuthScan(ctx, action, decision)
+	case "graphql_scan":
+		return r.actionGraphQLScan(ctx, action, decision)
+	case "websocket_scan":
+		return r.actionWebSocketScan(ctx, action, decision)
+	case "dns_enum":
+		return r.actionDNSEnum(ctx, action, decision)
+	case "asn_lookup":
+		return r.actionASNLookup(ctx, action, decision)
+	case "tech_fingerprint":
+		return r.actionTechFingerprint(ctx, action, decision)
 	default:
 		action.Result = fmt.Sprintf("Unknown action: %s", decision.Action)
 		action.Success = false
@@ -4638,6 +4655,314 @@ func (r *AutoRunner) actionBannerGrab(ctx context.Context, action *Action, decis
 				break
 			}
 		}
+	}
+
+	return action, nil
+}
+
+// ============================================================================
+// New Advanced Scanner Actions
+// ============================================================================
+
+func (r *AutoRunner) actionSSRFScan(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	if err := r.framework.Use("auxiliary/scanner/http/ssrf_scanner"); err != nil {
+		action.Result = fmt.Sprintf("Module error: %v", err)
+		action.Success = false
+		return action, nil
+	}
+
+	module := r.framework.Current()
+	target := decision.Target
+	if target == "" {
+		target = r.state.Target
+	}
+
+	module.SetOption("URL", target)
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("SSRF scan failed: %v", err)
+		action.Success = false
+		return action, nil
+	}
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	if result.Success && strings.Contains(result.Output, "VULNERABLE") {
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "ssrf",
+			Severity:    "high",
+			Target:      target,
+			Description: "Server-Side Request Forgery vulnerability detected",
+			Evidence:    result.Output,
+			Timestamp:   time.Now(),
+		})
+	}
+
+	return action, nil
+}
+
+func (r *AutoRunner) actionJWTScan(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	if err := r.framework.Use("auxiliary/scanner/http/jwt_scanner"); err != nil {
+		action.Result = fmt.Sprintf("Module error: %v", err)
+		action.Success = false
+		return action, nil
+	}
+
+	module := r.framework.Current()
+	target := decision.Target
+	if target == "" {
+		target = r.state.Target
+	}
+
+	module.SetOption("URL", target)
+
+	if token := getOpt(decision.Options, "token"); token != "" {
+		module.SetOption("TOKEN", token)
+	}
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("JWT scan failed: %v", err)
+		action.Success = false
+		return action, nil
+	}
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	if result.Success && strings.Contains(result.Output, "CRITICAL") {
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "jwt_vulnerability",
+			Severity:    "critical",
+			Target:      target,
+			Description: "JWT security vulnerability detected",
+			Evidence:    result.Output,
+			Timestamp:   time.Now(),
+		})
+	}
+
+	return action, nil
+}
+
+func (r *AutoRunner) actionOAuthScan(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	if err := r.framework.Use("auxiliary/scanner/http/oauth_scanner"); err != nil {
+		action.Result = fmt.Sprintf("Module error: %v", err)
+		action.Success = false
+		return action, nil
+	}
+
+	module := r.framework.Current()
+	target := decision.Target
+	if target == "" {
+		target = r.state.Target
+	}
+
+	module.SetOption("URL", target)
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("OAuth scan failed: %v", err)
+		action.Success = false
+		return action, nil
+	}
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	if result.Success && (strings.Contains(result.Output, "CRITICAL") || strings.Contains(result.Output, "HIGH")) {
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "oauth_misconfiguration",
+			Severity:    "high",
+			Target:      target,
+			Description: "OAuth/OIDC security misconfiguration detected",
+			Evidence:    result.Output,
+			Timestamp:   time.Now(),
+		})
+	}
+
+	return action, nil
+}
+
+func (r *AutoRunner) actionGraphQLScan(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	if err := r.framework.Use("auxiliary/scanner/http/graphql_scanner"); err != nil {
+		action.Result = fmt.Sprintf("Module error: %v", err)
+		action.Success = false
+		return action, nil
+	}
+
+	module := r.framework.Current()
+	target := decision.Target
+	if target == "" {
+		target = r.state.Target
+	}
+
+	module.SetOption("URL", target)
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("GraphQL scan failed: %v", err)
+		action.Success = false
+		return action, nil
+	}
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	if result.Success && strings.Contains(result.Output, "introspection enabled") {
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "graphql_introspection",
+			Severity:    "medium",
+			Target:      target,
+			Description: "GraphQL introspection enabled - schema exposed",
+			Evidence:    result.Output,
+			Timestamp:   time.Now(),
+		})
+	}
+
+	return action, nil
+}
+
+func (r *AutoRunner) actionWebSocketScan(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	if err := r.framework.Use("auxiliary/scanner/http/websocket_scanner"); err != nil {
+		action.Result = fmt.Sprintf("Module error: %v", err)
+		action.Success = false
+		return action, nil
+	}
+
+	module := r.framework.Current()
+	target := decision.Target
+	if target == "" {
+		target = r.state.Target
+	}
+
+	module.SetOption("URL", target)
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("WebSocket scan failed: %v", err)
+		action.Success = false
+		return action, nil
+	}
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	if result.Success && strings.Contains(result.Output, "origin_not_validated") {
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "websocket_cswsh",
+			Severity:    "high",
+			Target:      target,
+			Description: "WebSocket Cross-Site Hijacking vulnerability",
+			Evidence:    result.Output,
+			Timestamp:   time.Now(),
+		})
+	}
+
+	return action, nil
+}
+
+func (r *AutoRunner) actionDNSEnum(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	if err := r.framework.Use("auxiliary/gather/dns_enum"); err != nil {
+		action.Result = fmt.Sprintf("Module error: %v", err)
+		action.Success = false
+		return action, nil
+	}
+
+	module := r.framework.Current()
+	domain := decision.Target
+	if domain == "" {
+		domain = r.state.Target
+	}
+	domain = strings.TrimPrefix(domain, "http://")
+	domain = strings.TrimPrefix(domain, "https://")
+	domain = strings.Split(domain, "/")[0]
+	domain = strings.Split(domain, ":")[0]
+
+	module.SetOption("DOMAIN", domain)
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("DNS enumeration failed: %v", err)
+		action.Success = false
+		return action, nil
+	}
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	return action, nil
+}
+
+func (r *AutoRunner) actionASNLookup(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	if err := r.framework.Use("auxiliary/gather/asn_lookup"); err != nil {
+		action.Result = fmt.Sprintf("Module error: %v", err)
+		action.Success = false
+		return action, nil
+	}
+
+	module := r.framework.Current()
+	target := decision.Target
+	if target == "" {
+		target = r.state.Target
+	}
+
+	module.SetOption("TARGET", target)
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("ASN lookup failed: %v", err)
+		action.Success = false
+		return action, nil
+	}
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	return action, nil
+}
+
+func (r *AutoRunner) actionTechFingerprint(ctx context.Context, action *Action, decision *AIDecision) (*Action, error) {
+	if err := r.framework.Use("auxiliary/gather/tech_fingerprint"); err != nil {
+		action.Result = fmt.Sprintf("Module error: %v", err)
+		action.Success = false
+		return action, nil
+	}
+
+	module := r.framework.Current()
+	target := decision.Target
+	if target == "" {
+		target = r.state.Target
+	}
+
+	// Ensure URL format
+	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
+		target = "http://" + target
+	}
+
+	module.SetOption("URL", target)
+
+	result, err := module.Run(ctx)
+	if err != nil {
+		action.Result = fmt.Sprintf("Technology fingerprinting failed: %v", err)
+		action.Success = false
+		return action, nil
+	}
+
+	action.Result = result.Output
+	action.Success = result.Success
+
+	// Check for missing security headers
+	if strings.Contains(result.Output, "MISSING SECURITY HEADERS") {
+		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			Type:        "missing_security_headers",
+			Severity:    "medium",
+			Target:      target,
+			Description: "Missing security headers detected",
+			Evidence:    result.Output,
+			Timestamp:   time.Now(),
+		})
 	}
 
 	return action, nil
