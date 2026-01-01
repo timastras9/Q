@@ -4715,12 +4715,21 @@ func (r *AutoRunner) actionSSRFScan(ctx context.Context, action *Action, decisio
 	action.Result = result.Output
 	action.Success = result.Success
 
-	if result.Success && strings.Contains(result.Output, "VULNERABLE") {
+	// Record SSRF scan findings
+	if result.Output != "" && len(result.Output) > 50 {
+		severity := "info"
+		if strings.Contains(result.Output, "CRITICAL") || strings.Contains(result.Output, "metadata") {
+			severity = "critical"
+		} else if strings.Contains(result.Output, "VULNERABLE") || strings.Contains(result.Output, "bypass") {
+			severity = "high"
+		} else if strings.Contains(result.Output, "MEDIUM") {
+			severity = "medium"
+		}
 		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
-			Type:        "ssrf",
-			Severity:    "high",
+			Type:        "ssrf_scan",
+			Severity:    severity,
 			Target:      target,
-			Description: "Server-Side Request Forgery vulnerability detected",
+			Description: "SSRF security scan results",
 			Evidence:    result.Output,
 			Timestamp:   time.Now(),
 		})
@@ -4758,12 +4767,21 @@ func (r *AutoRunner) actionJWTScan(ctx context.Context, action *Action, decision
 	action.Result = result.Output
 	action.Success = result.Success
 
-	if result.Success && strings.Contains(result.Output, "CRITICAL") {
+	// Record JWT scan findings
+	if result.Output != "" && len(result.Output) > 50 {
+		severity := "info"
+		if strings.Contains(result.Output, "CRITICAL") || strings.Contains(result.Output, "none algorithm") {
+			severity = "critical"
+		} else if strings.Contains(result.Output, "HIGH") || strings.Contains(result.Output, "weak secret") {
+			severity = "high"
+		} else if strings.Contains(result.Output, "MEDIUM") {
+			severity = "medium"
+		}
 		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
-			Type:        "jwt_vulnerability",
-			Severity:    "critical",
+			Type:        "jwt_scan",
+			Severity:    severity,
 			Target:      target,
-			Description: "JWT security vulnerability detected",
+			Description: "JWT security scan results",
 			Evidence:    result.Output,
 			Timestamp:   time.Now(),
 		})
@@ -4797,12 +4815,21 @@ func (r *AutoRunner) actionOAuthScan(ctx context.Context, action *Action, decisi
 	action.Result = result.Output
 	action.Success = result.Success
 
-	if result.Success && (strings.Contains(result.Output, "CRITICAL") || strings.Contains(result.Output, "HIGH")) {
+	// Record OAuth scan findings
+	if result.Output != "" && len(result.Output) > 50 {
+		severity := "info"
+		if strings.Contains(result.Output, "CRITICAL") {
+			severity = "critical"
+		} else if strings.Contains(result.Output, "HIGH") || strings.Contains(result.Output, "redirect") {
+			severity = "high"
+		} else if strings.Contains(result.Output, "MEDIUM") {
+			severity = "medium"
+		}
 		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
-			Type:        "oauth_misconfiguration",
-			Severity:    "high",
+			Type:        "oauth_scan",
+			Severity:    severity,
 			Target:      target,
-			Description: "OAuth/OIDC security misconfiguration detected",
+			Description: "OAuth/OIDC security scan results",
 			Evidence:    result.Output,
 			Timestamp:   time.Now(),
 		})
@@ -4836,12 +4863,21 @@ func (r *AutoRunner) actionGraphQLScan(ctx context.Context, action *Action, deci
 	action.Result = result.Output
 	action.Success = result.Success
 
-	if result.Success && strings.Contains(result.Output, "introspection enabled") {
+	// Record GraphQL scan findings
+	if result.Output != "" && len(result.Output) > 50 {
+		severity := "info"
+		if strings.Contains(result.Output, "CRITICAL") || strings.Contains(result.Output, "injection") {
+			severity = "critical"
+		} else if strings.Contains(result.Output, "HIGH") {
+			severity = "high"
+		} else if strings.Contains(result.Output, "introspection") || strings.Contains(result.Output, "MEDIUM") {
+			severity = "medium"
+		}
 		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
-			Type:        "graphql_introspection",
-			Severity:    "medium",
+			Type:        "graphql_scan",
+			Severity:    severity,
 			Target:      target,
-			Description: "GraphQL introspection enabled - schema exposed",
+			Description: "GraphQL security scan results",
 			Evidence:    result.Output,
 			Timestamp:   time.Now(),
 		})
@@ -4875,15 +4911,26 @@ func (r *AutoRunner) actionWebSocketScan(ctx context.Context, action *Action, de
 	action.Result = result.Output
 	action.Success = result.Success
 
-	if result.Success && strings.Contains(result.Output, "origin_not_validated") {
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
-			Type:        "websocket_cswsh",
-			Severity:    "high",
-			Target:      target,
-			Description: "WebSocket Cross-Site Hijacking vulnerability",
-			Evidence:    result.Output,
-			Timestamp:   time.Now(),
-		})
+	// Check for various WebSocket vulnerability indicators
+	if result.Success || strings.Contains(result.Output, "origin") || strings.Contains(result.Output, "VULNERABLE") || strings.Contains(result.Output, "CRITICAL") {
+		severity := "info"
+		if strings.Contains(result.Output, "CRITICAL") {
+			severity = "critical"
+		} else if strings.Contains(result.Output, "HIGH") || strings.Contains(result.Output, "origin_not_validated") {
+			severity = "high"
+		} else if strings.Contains(result.Output, "MEDIUM") {
+			severity = "medium"
+		}
+		if result.Output != "" && len(result.Output) > 50 {
+			r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+				Type:        "websocket_scan",
+				Severity:    severity,
+				Target:      target,
+				Description: "WebSocket security scan results",
+				Evidence:    result.Output,
+				Timestamp:   time.Now(),
+			})
+		}
 	}
 
 	return action, nil
@@ -4979,13 +5026,21 @@ func (r *AutoRunner) actionTechFingerprint(ctx context.Context, action *Action, 
 	action.Result = result.Output
 	action.Success = result.Success
 
-	// Check for missing security headers
-	if strings.Contains(result.Output, "MISSING SECURITY HEADERS") {
+	// Record tech fingerprint findings
+	if result.Output != "" && len(result.Output) > 50 {
+		severity := "info"
+		if strings.Contains(result.Output, "CRITICAL") {
+			severity = "critical"
+		} else if strings.Contains(result.Output, "HIGH") || strings.Contains(result.Output, "outdated") {
+			severity = "high"
+		} else if strings.Contains(result.Output, "MISSING") || strings.Contains(result.Output, "MEDIUM") {
+			severity = "medium"
+		}
 		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
-			Type:        "missing_security_headers",
-			Severity:    "medium",
+			Type:        "tech_fingerprint",
+			Severity:    severity,
 			Target:      target,
-			Description: "Missing security headers detected",
+			Description: "Technology fingerprint scan results",
 			Evidence:    result.Output,
 			Timestamp:   time.Now(),
 		})
