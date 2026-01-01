@@ -5051,14 +5051,15 @@ func (r *AutoRunner) actionTechFingerprint(ctx context.Context, action *Action, 
 
 // runForcedWebScans runs new advanced modules on all detected web ports
 func (r *AutoRunner) runForcedWebScans(ctx context.Context, target string) {
-	// Common web ports to scan
-	webPorts := []int{80, 443, 3000, 8080, 8443, 8888}
+	// Common web ports to scan (including new vulnerable services)
+	webPorts := []int{80, 443, 3000, 5001, 5002, 8080, 8443, 8888}
 
 	// New modules to force-run on each web port
 	webModules := []string{
 		"tech_fingerprint",
 		"ssrf_scan",
 		"jwt_scan",
+		"oauth_scan",
 		"graphql_scan",
 		"websocket_scan",
 	}

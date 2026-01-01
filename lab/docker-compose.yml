@@ -944,6 +944,30 @@ services:
     networks:
       - default
 
+  # ============================================
+  # TIER 11: MODERN API VULNERABILITIES
+  # ============================================
+
+  # GraphQL with introspection, injection, and DoS vectors
+  graphql-vuln:
+    build:
+      context: ./services/graphql-vuln
+      dockerfile: Dockerfile
+    container_name: lab-graphql
+    ports:
+      - "5001:5001"
+    restart: unless-stopped
+
+  # OAuth/OIDC with open redirect, weak tokens, implicit flow
+  oauth-vuln:
+    build:
+      context: ./services/oauth-vuln
+      dockerfile: Dockerfile
+    container_name: lab-oauth
+    ports:
+      - "5002:5002"
+    restart: unless-stopped
+
 volumes:
   wireless_captures:
   kali_data:
