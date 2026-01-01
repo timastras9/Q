@@ -20,16 +20,17 @@ import (
 
 // AutoRunner executes autonomous penetration tests
 type AutoRunner struct {
-	ai         *AutoPentester
-	scanner    *recon.Scanner
-	webScanner *webapp.WebScanner
-	framework  *exploit.Framework
-	state      *PentestState
-	report     *PentestReport
-	callbacks  RunnerCallbacks
-	running    bool
-	maxActions int
-	aei        *AEI // Adaptive Exploitation Intelligence
+	ai              *AutoPentester
+	scanner         *recon.Scanner
+	webScanner      *webapp.WebScanner
+	framework       *exploit.Framework
+	state           *PentestState
+	report          *PentestReport
+	callbacks       RunnerCallbacks
+	running         bool
+	maxActions      int
+	aei             *AEI              // Adaptive Exploitation Intelligence
+	executedActions map[string]bool   // Track action+target to prevent duplicates
 }
 
 type RunnerCallbacks struct {
@@ -52,9 +53,25 @@ func NewAutoRunner(client *ClaudeClient) *AutoRunner {
 		state: &PentestState{
 			Phase: "initialization",
 		},
-		maxActions: 100, // Default max actions
-		aei:        NewAEI("output/training/aei_data.json"), // Adaptive Exploitation Intelligence
+		maxActions:      100, // Default max actions
+		aei:             NewAEI("output/training/aei_data.json"), // Adaptive Exploitation Intelligence
+		executedActions: make(map[string]bool),
 	}
+}
+
+// actionKey generates a unique key for action+target deduplication
+func (r *AutoRunner) actionKey(action, target string) string {
+	return action + "|" + target
+}
+
+// wasExecuted checks if an action+target combo was already run
+func (r *AutoRunner) wasExecuted(action, target string) bool {
+	return r.executedActions[r.actionKey(action, target)]
+}
+
+// markExecuted marks an action+target combo as executed
+func (r *AutoRunner) markExecuted(action, target string) {
+	r.executedActions[r.actionKey(action, target)] = true
 }
 
 // SetAEI sets a custom AEI instance (for sharing across agents)
@@ -204,11 +221,17 @@ func (r *AutoRunner) Run(ctx context.Context, target string, scope []string) (*P
 			break
 		}
 
+		// Skip if already executed (deduplication)
+		if r.wasExecuted(decision.Action, decision.Target) {
+			continue
+		}
+
 		// Execute the action
 		if r.callbacks.OnActionStart != nil {
 			r.callbacks.OnActionStart(decision.Action, decision.Target)
 		}
 
+		r.markExecuted(decision.Action, decision.Target)
 		actionStart := time.Now()
 		action, err := r.executeAction(ctx, decision)
 		actionDuration := time.Since(actionStart)
@@ -5005,12 +5028,17 @@ func (r *AutoRunner) runForcedWebScans(ctx context.Context, target string) {
 		}
 		url := fmt.Sprintf("%s://%s:%d", scheme, target, port)
 
-		// Run each module
+		// Run each module (skip if already executed)
 		for _, module := range webModules {
 			select {
 			case <-ctx.Done():
 				return
 			default:
+			}
+
+			// Skip if already executed
+			if r.wasExecuted(module, url) {
+				continue
 			}
 
 			decision := AIDecision{
@@ -5024,6 +5052,7 @@ func (r *AutoRunner) runForcedWebScans(ctx context.Context, target string) {
 				r.callbacks.OnActionStart(module, url)
 			}
 
+			r.markExecuted(module, url)
 			action, _ := r.executeAction(ctx, &decision)
 			if action != nil {
 				r.state.ActionHistory = append(r.state.ActionHistory, *action)
