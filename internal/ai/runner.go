@@ -123,6 +123,14 @@ func getOpt(opts map[string]interface{}, key string) string {
 	return ""
 }
 
+// addFinding adds a finding to state and calls the OnFinding callback
+func (r *AutoRunner) addFinding(finding Finding) {
+	r.state.Vulnerabilities = append(r.state.Vulnerabilities, finding)
+	if r.callbacks.OnFinding != nil {
+		r.callbacks.OnFinding(finding)
+	}
+}
+
 // setModuleOptionsFromURL parses a URL and sets RHOSTS, RPORT, SSL, TARGETURI on the module
 func setModuleOptionsFromURL(module exploit.Exploit, targetURL string) {
 	ssl := strings.HasPrefix(targetURL, "https://")
@@ -862,7 +870,7 @@ func (r *AutoRunner) actionFTPAnon(ctx context.Context, action *Action, decision
 	}
 
 	if result.Success {
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "anonymous_ftp",
 			Severity:    "medium",
 			Target:      decision.Target,
@@ -974,7 +982,7 @@ func (r *AutoRunner) actionRedisCheck(ctx context.Context, action *Action, decis
 			evidence.WriteString(fmt.Sprintf("Database Size: %d keys\n", dbsize))
 		}
 
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "redis_unauth",
 			Severity:    "critical",
 			Target:      decision.Target,
@@ -1080,7 +1088,7 @@ func (r *AutoRunner) actionCmdInject(ctx context.Context, action *Action, decisi
 	}
 
 	if result.Success {
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "command_injection",
 			Severity:    "critical",
 			Target:      decision.Target,
@@ -1160,7 +1168,7 @@ func (r *AutoRunner) actionSQLiExploit(ctx context.Context, action *Action, deci
 	}
 
 	if result.Success {
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "sql_injection",
 			Severity:    "critical",
 			Target:      decision.Target,
@@ -1437,7 +1445,7 @@ func (r *AutoRunner) actionSSHRecon(ctx context.Context, action *Action, decisio
 	}
 
 	// Add critical finding
-	r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+	r.addFinding(Finding{
 		Type:        "ssh_compromise",
 		Severity:    "critical",
 		Target:      fmt.Sprintf("%s:%s", target, port),
@@ -1621,7 +1629,7 @@ func (r *AutoRunner) actionSSHPivot(ctx context.Context, action *Action, decisio
 
 	// Add finding
 	if len(discoveredHosts) > 0 || len(discoveredNetworks) > 0 {
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "internal_network_discovery",
 			Severity:    "high",
 			Target:      fmt.Sprintf("%s:%s", target, port),
@@ -2175,7 +2183,7 @@ func (r *AutoRunner) actionPivotScan(ctx context.Context, action *Action, decisi
 				redisResult, _ := module.Run(ctx)
 				if redisResult != nil && strings.Contains(redisResult.Output, "redis_version") {
 					sb.WriteString(fmt.Sprintf("  [!] CRITICAL: Redis on %s:%d - NO AUTH REQUIRED!\n", internalHost, port))
-					r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+					r.addFinding(Finding{
 						Type:        "internal_redis_unauth",
 						Severity:    "critical",
 						Target:      fmt.Sprintf("%s:%d", internalHost, port),
@@ -2198,7 +2206,7 @@ func (r *AutoRunner) actionPivotScan(ctx context.Context, action *Action, decisi
 				mongoResult, _ := module.Run(ctx)
 				if mongoResult != nil && (strings.Contains(mongoResult.Output, "databases") || strings.Contains(mongoResult.Output, "admin")) {
 					sb.WriteString(fmt.Sprintf("  [!] CRITICAL: MongoDB on %s:%d - NO AUTH REQUIRED!\n", internalHost, port))
-					r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+					r.addFinding(Finding{
 						Type:        "internal_mongodb_unauth",
 						Severity:    "critical",
 						Target:      fmt.Sprintf("%s:%d", internalHost, port),
@@ -2214,7 +2222,7 @@ func (r *AutoRunner) actionPivotScan(ctx context.Context, action *Action, decisi
 				esResult, _ := module.Run(ctx)
 				if esResult != nil && strings.Contains(esResult.Output, "cluster_name") {
 					sb.WriteString(fmt.Sprintf("  [!] HIGH: Elasticsearch on %s:%d - Exposed!\n", internalHost, port))
-					r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+					r.addFinding(Finding{
 						Type:        "internal_elasticsearch_exposed",
 						Severity:    "high",
 						Target:      fmt.Sprintf("%s:%d", internalHost, port),
@@ -2293,7 +2301,7 @@ func (r *AutoRunner) actionReverseShell(ctx context.Context, action *Action, dec
 	}
 
 	// Add finding about available reverse shell payloads
-	r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+	r.addFinding(Finding{
 		Type:        "reverse_shell_ready",
 		Severity:    "info",
 		Target:      decision.Target,
@@ -2804,7 +2812,7 @@ func (r *AutoRunner) actionLFI(ctx context.Context, action *Action, decision *AI
 	}
 
 	if result.Success {
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "local_file_inclusion",
 			Severity:    "high",
 			Target:      decision.Target,
@@ -2881,7 +2889,7 @@ func (r *AutoRunner) actionSSRF(ctx context.Context, action *Action, decision *A
 	}
 
 	if result.Success {
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "ssrf",
 			Severity:    "high",
 			Target:      decision.Target,
@@ -2961,7 +2969,7 @@ func (r *AutoRunner) actionFileUpload(ctx context.Context, action *Action, decis
 	}
 
 	if result.Success {
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "file_upload_rce",
 			Severity:    "critical",
 			Target:      decision.Target,
@@ -3059,7 +3067,7 @@ func (r *AutoRunner) actionNucleiScan(ctx context.Context, action *Action, decis
 					severity = "info"
 				}
 
-				r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+				r.addFinding(Finding{
 					Type:        "nuclei_" + f.TemplateID,
 					Severity:    severity,
 					Target:      f.MatchedAt,
@@ -3140,7 +3148,7 @@ func (r *AutoRunner) actionXSSScan(ctx context.Context, action *Action, decision
 	}
 
 	if result.Success {
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "xss_reflected",
 			Severity:    "medium",
 			Target:      decision.Target,
@@ -3224,7 +3232,7 @@ func (r *AutoRunner) actionNiktoScan(ctx context.Context, action *Action, decisi
 					severity = "medium"
 				}
 
-				r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+				r.addFinding(Finding{
 					Type:        "nikto_" + f.Reference,
 					Severity:    severity,
 					Target:      decision.Target,
@@ -3308,7 +3316,7 @@ func (r *AutoRunner) actionSubdomainEnum(ctx context.Context, action *Action, de
 			}
 
 			// Add finding for discovered subdomains
-			r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			r.addFinding(Finding{
 				Type:        "subdomain_discovery",
 				Severity:    "info",
 				Target:      domain,
@@ -3382,7 +3390,7 @@ func (r *AutoRunner) actionSSLScan(ctx context.Context, action *Action, decision
 	if result.Success {
 		if findings, ok := result.Data["findings"].([]exploit.SSLFinding); ok {
 			for _, f := range findings {
-				r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+				r.addFinding(Finding{
 					Type:        "ssl_" + f.Type,
 					Severity:    f.Severity,
 					Target:      fmt.Sprintf("%s:%s", target, port),
@@ -3515,7 +3523,7 @@ func (r *AutoRunner) actionSSLConnect(ctx context.Context, action *Action, decis
 		}
 
 		// Record connection success
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "ssl_traffic_analysis",
 			Severity:    severity,
 			Target:      fmt.Sprintf("%s:%s", target, port),
@@ -3598,7 +3606,7 @@ func (r *AutoRunner) actionAPIFuzz(ctx context.Context, action *Action, decision
 	if result.Success {
 		if findings, ok := result.Data["findings"].([]exploit.APIFinding); ok {
 			for _, f := range findings {
-				r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+				r.addFinding(Finding{
 					Type:        "api_" + f.Type,
 					Severity:    f.Severity,
 					Target:      fmt.Sprintf("%s:%s%s", target, port, f.Endpoint),
@@ -3681,7 +3689,7 @@ func (r *AutoRunner) actionCrackHash(ctx context.Context, action *Action, decisi
 		}
 
 		// Add as finding
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "cracked_password",
 			Severity:    "high",
 			Target:      hash,
@@ -3782,7 +3790,7 @@ func (r *AutoRunner) actionMySQLCheck(ctx context.Context, action *Action, decis
 				r.callbacks.OnCredential(cf)
 			}
 
-			r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			r.addFinding(Finding{
 				Type:        "weak_credentials",
 				Severity:    "critical",
 				Target:      target,
@@ -3817,7 +3825,7 @@ func (r *AutoRunner) actionMongoDBCheck(ctx context.Context, action *Action, dec
 	output, err := cmd.CombinedOutput()
 
 	if err == nil && (strings.Contains(string(output), "databases") || strings.Contains(string(output), "name")) {
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "unauthenticated_access",
 			Severity:    "critical",
 			Target:      target,
@@ -3882,7 +3890,7 @@ func (r *AutoRunner) actionPostgresCheck(ctx context.Context, action *Action, de
 				r.callbacks.OnCredential(cf)
 			}
 
-			r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			r.addFinding(Finding{
 				Type:        "weak_credentials",
 				Severity:    "critical",
 				Target:      target,
@@ -3955,7 +3963,7 @@ func (r *AutoRunner) actionFTPLogin(ctx context.Context, action *Action, decisio
 					r.callbacks.OnCredential(cf)
 				}
 
-				r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+				r.addFinding(Finding{
 					Type:        "weak_credentials",
 					Severity:    "high",
 					Target:      target,
@@ -4034,7 +4042,7 @@ func (r *AutoRunner) actionXMLRPCExploit(ctx context.Context, action *Action, de
 			evidence.WriteString(fmt.Sprintf("Response Sample:\n%s\n", raw))
 		}
 
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "rpc_command_injection",
 			Severity:    "critical",
 			Target:      fmt.Sprintf("%s:%s", host, port),
@@ -4131,7 +4139,7 @@ func (r *AutoRunner) actionJSONRPCExploit(ctx context.Context, action *Action, d
 	}
 
 	if result.Success {
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "rpc_info_disclosure",
 			Severity:    "high",
 			Target:      fmt.Sprintf("%s:%s", host, port),
@@ -4204,7 +4212,7 @@ func (r *AutoRunner) actionRMIExploit(ctx context.Context, action *Action, decis
 			evidence.WriteString(fmt.Sprintf("Exposed Secrets:\n%s\n", secrets))
 		}
 
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "java_rmi_rce",
 			Severity:    "critical",
 			Target:      fmt.Sprintf("%s:%s", host, port),
@@ -4267,7 +4275,7 @@ func (r *AutoRunner) actionRPCBindScan(ctx context.Context, action *Action, deci
 	if nfsExports, ok := result.Data["nfs_exports"].(string); ok {
 		evidence.WriteString(fmt.Sprintf("NFS Exports:\n%s\n", nfsExports))
 		if strings.Contains(nfsExports, "*") {
-			r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			r.addFinding(Finding{
 				Type:        "nfs_world_accessible",
 				Severity:    "high",
 				Target:      fmt.Sprintf("%s:%s", host, port),
@@ -4360,7 +4368,7 @@ func (r *AutoRunner) actionNFSExploit(ctx context.Context, action *Action, decis
 	}
 
 	if result.Success {
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "nfs_data_exposure",
 			Severity:    "critical",
 			Target:      host,
@@ -4433,7 +4441,7 @@ func (r *AutoRunner) actionGRPCExploit(ctx context.Context, action *Action, deci
 			}
 		}
 
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "grpc_command_injection",
 			Severity:    "critical",
 			Target:      fmt.Sprintf("%s:%s", host, port),
@@ -4481,7 +4489,7 @@ func (r *AutoRunner) actionMSRPCScan(ctx context.Context, action *Action, decisi
 	action.Success = result.Success
 
 	if result.Success {
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "msrpc_exposed",
 			Severity:    "medium",
 			Target:      target,
@@ -4514,7 +4522,7 @@ func (r *AutoRunner) actionDirBruteforce(ctx context.Context, action *Action, de
 
 	// Parse for found paths
 	if strings.Contains(result.Output, "[FOUND]") || strings.Contains(result.Output, "[200 OK]") {
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "exposed_paths",
 			Severity:    "medium",
 			Target:      target,
@@ -4542,7 +4550,7 @@ func (r *AutoRunner) actionSQLiTest(ctx context.Context, action *Action, decisio
 	action.Success = result.Success
 
 	if strings.Contains(result.Output, "[VULNERABLE]") || strings.Contains(result.Output, "[CRITICAL]") {
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "sql_injection",
 			Severity:    "critical",
 			Target:      target,
@@ -4571,7 +4579,7 @@ func (r *AutoRunner) actionLFITest(ctx context.Context, action *Action, decision
 	action.Success = result.Success
 
 	if strings.Contains(result.Output, "[VULNERABLE]") || strings.Contains(result.Output, "[CRITICAL]") {
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "lfi",
 			Severity:    "critical",
 			Target:      target,
@@ -4597,7 +4605,7 @@ func (r *AutoRunner) actionLDAPCheck(ctx context.Context, action *Action, decisi
 	action.Success = result.Success
 
 	if strings.Contains(result.Output, "[CRITICAL]") {
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "ldap_anonymous",
 			Severity:    "critical",
 			Target:      target,
@@ -4623,7 +4631,7 @@ func (r *AutoRunner) actionSNMPCheck(ctx context.Context, action *Action, decisi
 	action.Success = result.Success
 
 	if strings.Contains(result.Output, "[CRITICAL]") {
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "snmp_default_community",
 			Severity:    "high",
 			Target:      target,
@@ -4672,7 +4680,7 @@ func (r *AutoRunner) actionDNSZoneTransfer(ctx context.Context, action *Action, 
 	action.Success = result.Success
 
 	if strings.Contains(result.Output, "[CRITICAL]") {
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "dns_zone_transfer",
 			Severity:    "high",
 			Target:      domain,
@@ -4757,7 +4765,7 @@ func (r *AutoRunner) actionSSRFScan(ctx context.Context, action *Action, decisio
 		} else if strings.Contains(result.Output, "MEDIUM") {
 			severity = "medium"
 		}
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "ssrf_scan",
 			Severity:    severity,
 			Target:      target,
@@ -4809,7 +4817,7 @@ func (r *AutoRunner) actionJWTScan(ctx context.Context, action *Action, decision
 		} else if strings.Contains(result.Output, "MEDIUM") {
 			severity = "medium"
 		}
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "jwt_scan",
 			Severity:    severity,
 			Target:      target,
@@ -4857,7 +4865,7 @@ func (r *AutoRunner) actionOAuthScan(ctx context.Context, action *Action, decisi
 		} else if strings.Contains(result.Output, "MEDIUM") {
 			severity = "medium"
 		}
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "oauth_scan",
 			Severity:    severity,
 			Target:      target,
@@ -4905,7 +4913,7 @@ func (r *AutoRunner) actionGraphQLScan(ctx context.Context, action *Action, deci
 		} else if strings.Contains(result.Output, "introspection") || strings.Contains(result.Output, "MEDIUM") {
 			severity = "medium"
 		}
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "graphql_scan",
 			Severity:    severity,
 			Target:      target,
@@ -4954,7 +4962,7 @@ func (r *AutoRunner) actionWebSocketScan(ctx context.Context, action *Action, de
 			severity = "medium"
 		}
 		if result.Output != "" && len(result.Output) > 50 {
-			r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+			r.addFinding(Finding{
 				Type:        "websocket_scan",
 				Severity:    severity,
 				Target:      target,
@@ -5068,7 +5076,7 @@ func (r *AutoRunner) actionTechFingerprint(ctx context.Context, action *Action, 
 		} else if strings.Contains(result.Output, "MISSING") || strings.Contains(result.Output, "MEDIUM") {
 			severity = "medium"
 		}
-		r.state.Vulnerabilities = append(r.state.Vulnerabilities, Finding{
+		r.addFinding(Finding{
 			Type:        "tech_fingerprint",
 			Severity:    severity,
 			Target:      target,
@@ -5141,9 +5149,18 @@ func (r *AutoRunner) runForcedWebScans(ctx context.Context, target string) {
 			}
 
 			r.markExecuted(module, url)
-			action, _ := r.executeAction(ctx, &decision)
+			action, err := r.executeAction(ctx, &decision)
+			if err != nil {
+				fmt.Printf("[DEBUG] %s error: %v\n", module, err)
+			}
 			if action != nil {
 				r.state.ActionHistory = append(r.state.ActionHistory, *action)
+				// Debug: show if scan found anything
+				if action.Success {
+					fmt.Printf("[DEBUG] %s on %s: SUCCESS - %d chars output\n", module, url, len(action.Result))
+				} else if len(action.Result) > 0 {
+					fmt.Printf("[DEBUG] %s on %s: %d chars output\n", module, url, len(action.Result))
+				}
 			}
 		}
 	}
