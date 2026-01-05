@@ -968,6 +968,44 @@ services:
       - "5002:5002"
     restart: unless-stopped
 
+  # ============================================
+  # TIER 12: SENTINEL DARWIN - AUTONOMOUS SECURITY
+  # ============================================
+
+  # Sentinel Darwin - Self-defending security daemon
+  sentinel-darwin:
+    build:
+      context: ../sentinel-darwin
+      dockerfile: Dockerfile
+    container_name: lab-sentinel-darwin
+    hostname: sentinel-darwin
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - SYS_PTRACE
+      - AUDIT_CONTROL
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - SENTINEL_LOG_LEVEL=INFO
+    volumes:
+      - sentinel_data:/opt/sentinel/data
+      - sentinel_logs:/var/log/sentinel
+    restart: unless-stopped
+
+  # Sentinel Threat Intel API
+  sentinel-threat-api:
+    build:
+      context: ../sentinel-darwin
+      dockerfile: Dockerfile.api
+    container_name: lab-sentinel-api
+    ports:
+      - "8097:8095"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    volumes:
+      - sentinel_data:/opt/sentinel/data:ro
+    restart: unless-stopped
+
 volumes:
   wireless_captures:
   kali_data:
@@ -981,6 +1019,8 @@ volumes:
   nfs_data:
   sunrpc_share:
   redis_ssh_data:
+  sentinel_data:
+  sentinel_logs:
 
 networks:
   default:

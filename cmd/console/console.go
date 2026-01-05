@@ -18,6 +18,7 @@ import (
 	"pentestai/internal/exploit"
 	"pentestai/internal/recon"
 	"pentestai/internal/remediation"
+	"pentestai/internal/util"
 	"pentestai/internal/webapp"
 )
 
@@ -423,7 +424,8 @@ func (c *Console) cmdRun(args []string) {
 	if len(result.Credentials) > 0 {
 		fmt.Printf("\n%s[+]%s Credentials found:\n", colorGreen, colorReset)
 		for _, cred := range result.Credentials {
-			fmt.Printf("    %s:%s\n", cred.Username, cred.Password)
+			// Sanitize password for display - show service, username, and masked password
+			fmt.Printf("    %s @ %s - %s:%s\n", cred.Source, cred.Type, cred.Username, util.SanitizePassword(cred.Password))
 		}
 	}
 
@@ -968,18 +970,36 @@ func (c *Console) cmdAutoPwn(args []string) {
 		},
 		OnFinding: func(finding ai.Finding) {
 			sevColor := colorBlue
+			sevIcon := "ℹ"
 			switch strings.ToLower(finding.Severity) {
 			case "critical":
 				sevColor = colorRed + colorBold
+				sevIcon = "🔴"
 			case "high":
 				sevColor = colorRed
+				sevIcon = "🟠"
 			case "medium":
 				sevColor = colorYellow
+				sevIcon = "🟡"
+			case "low":
+				sevColor = colorCyan
+				sevIcon = "🔵"
 			}
-			fmt.Printf("%s[VULN]%s %s%s%s - %s\n",
-				colorMagenta, colorReset, sevColor, finding.Severity, colorReset, finding.Type)
-			fmt.Printf("       Target: %s\n", finding.Target)
-			fmt.Printf("       %s\n", finding.Description)
+			fmt.Printf("\n%s╔══ VULNERABILITY FOUND ══╗%s\n", sevColor, colorReset)
+			fmt.Printf("%s[%s %s]%s %s\n", sevColor, sevIcon, strings.ToUpper(finding.Severity), colorReset, finding.Type)
+			fmt.Printf("  %sTarget:%s  %s\n", colorBold, colorReset, finding.Target)
+			fmt.Printf("  %sDesc:%s    %s\n", colorBold, colorReset, finding.Description)
+			if finding.Evidence != "" {
+				// Truncate evidence for terminal display
+				evidence := finding.Evidence
+				if len(evidence) > 200 {
+					evidence = evidence[:200] + "..."
+				}
+				// Remove newlines for cleaner display
+				evidence = strings.ReplaceAll(evidence, "\n", " ")
+				fmt.Printf("  %sEvidence:%s %s\n", colorBold, colorReset, evidence)
+			}
+			fmt.Printf("%s╚═════════════════════════╝%s\n", sevColor, colorReset)
 		},
 		OnCredential: func(cred ai.CredentialFind) {
 			fmt.Printf("%s[CRED]%s Found: %s%s:%s%s on %s (%s)\n",
@@ -1012,7 +1032,8 @@ func (c *Console) cmdAutoPwn(args []string) {
 			if len(report.CredentialsFound) > 0 {
 				fmt.Printf("%sCredentials Discovered:%s\n", colorBold, colorReset)
 				for _, cred := range report.CredentialsFound {
-					fmt.Printf("  %s:%s @ %s (%s)\n", cred.Username, cred.Password, cred.Target, cred.Service)
+					// Sanitize password for display
+					fmt.Printf("  %s @ %s (%s) - %s\n", cred.Username, cred.Target, cred.Service, util.SanitizePassword(cred.Password))
 				}
 				fmt.Println()
 			}
@@ -1231,11 +1252,13 @@ type VulnEntry struct {
 }
 
 type CredEntry struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-	Hash     string `json:"hash"`
-	Type     string `json:"type"`
-	Source   string `json:"source"`
+	Username     string `json:"username"`
+	PasswordHash string `json:"password_hash"` // SHA256(salt + password) - never store plaintext
+	Salt         string `json:"salt"`          // Salt used for hashing
+	Display      string `json:"display"`       // Masked display version (e.g., "ad****(8) [hash:a1b2]")
+	Type         string `json:"type"`
+	Source       string `json:"source"`
+	Target       string `json:"target"`
 }
 
 func (c *Console) saveReportJSON(filename string) {
@@ -1276,13 +1299,19 @@ func (c *Console) saveReportJSON(filename string) {
 		})
 	}
 
-	// Convert credentials
+	// Convert credentials - hash passwords for security
 	for _, cred := range state.Credentials {
+		salt := util.GenerateSalt(cred.Username, cred.Service, cred.Target)
+		hash := util.HashPassword(cred.Password, salt)
+		display := util.SanitizePassword(cred.Password)
 		data.Credentials = append(data.Credentials, CredEntry{
-			Username: cred.Username,
-			Password: cred.Password,
-			Type:     "password",
-			Source:   cred.Service,
+			Username:     cred.Username,
+			PasswordHash: hash,
+			Salt:         salt,
+			Display:      display,
+			Type:         "password",
+			Source:       cred.Service,
+			Target:       cred.Target,
 		})
 	}
 
@@ -1332,17 +1361,23 @@ func (c *Console) saveAgentsReportJSON(filename string, state *ai.ScanState) err
 		})
 	}
 
-	// Convert credentials
+	// Convert credentials - hash passwords for security
 	for _, cred := range state.Credentials {
 		credType := "password"
 		if cred.Hash != "" {
 			credType = "hash"
 		}
+		salt := util.GenerateSalt(cred.Username, cred.Service, cred.Target)
+		hash := util.HashPassword(cred.Password, salt)
+		display := util.SanitizePassword(cred.Password)
 		data.Credentials = append(data.Credentials, CredEntry{
-			Username: cred.Username,
-			Password: cred.Password,
-			Type:     credType,
-			Source:   cred.Service,
+			Username:     cred.Username,
+			PasswordHash: hash,
+			Salt:         salt,
+			Display:      display,
+			Type:         credType,
+			Source:       cred.Service,
+			Target:       cred.Target,
 		})
 	}
 
@@ -1538,15 +1573,20 @@ func (c *Console) generateHTMLReport(state *ai.PentestState) string {
 	if len(state.Credentials) > 0 {
 		sb.WriteString(`<div class="cred-alert">
     <h3>⚠️ CRITICAL: Credentials Exposed</h3>
-    <p>The following credentials were extracted during testing:</p>
+    <p>The following credentials were extracted during testing (passwords hashed for security):</p>
     <table>
-        <tr><th>Username</th><th>Password</th><th>Source</th></tr>
+        <tr><th>Username</th><th>Password (Masked)</th><th>Service</th><th>Hash</th></tr>
 `)
 		for _, cred := range state.Credentials {
-			sb.WriteString(fmt.Sprintf("        <tr><td><strong>%s</strong></td><td><code>%s</code></td><td>%s</td></tr>\n",
-				cred.Username, cred.Password, cred.Service))
+			// Hash password for report - never store plaintext
+			salt := util.GenerateSalt(cred.Username, cred.Service, cred.Target)
+			hash := util.HashPassword(cred.Password, salt)
+			masked := util.SanitizePassword(cred.Password)
+			sb.WriteString(fmt.Sprintf("        <tr><td><strong>%s</strong></td><td><code>%s</code></td><td>%s</td><td><small>%s</small></td></tr>\n",
+				cred.Username, masked, cred.Service, hash[:16]+"..."))
 		}
 		sb.WriteString(`    </table>
+    <p><small>Full password hashes available in JSON export for verification purposes.</small></p>
 </div>
 `)
 	}
@@ -1628,12 +1668,17 @@ func (c *Console) generateMarkdownReport(state *ai.PentestState) string {
 	// Credentials alert
 	if len(state.Credentials) > 0 {
 		sb.WriteString("## ⚠️ CRITICAL: Exposed Credentials\n\n")
-		sb.WriteString("| Username | Password | Source |\n")
-		sb.WriteString("|----------|----------|--------|\n")
+		sb.WriteString("| Username | Password (Masked) | Service | Hash |\n")
+		sb.WriteString("|----------|-------------------|---------|------|\n")
 		for _, cred := range state.Credentials {
-			sb.WriteString(fmt.Sprintf("| **%s** | `%s` | %s |\n", cred.Username, cred.Password, cred.Service))
+			// Hash password for report - never store plaintext
+			salt := util.GenerateSalt(cred.Username, cred.Service, cred.Target)
+			hash := util.HashPassword(cred.Password, salt)
+			masked := util.SanitizePassword(cred.Password)
+			sb.WriteString(fmt.Sprintf("| **%s** | `%s` | %s | `%s...` |\n", cred.Username, masked, cred.Service, hash[:16]))
 		}
 		sb.WriteString("\n**Immediate action required: Change all exposed passwords.**\n\n")
+		sb.WriteString("*Note: Passwords are masked and hashed for security. Full hashes available in JSON export.*\n\n")
 		sb.WriteString("---\n\n")
 	}
 
@@ -2630,13 +2675,37 @@ func (c *Console) cmdAutoPwnAgents(args []string) {
 			fmt.Printf("%s[%s]%s %s -> %s\n", agentColor, strings.ToUpper(agent), colorReset, action, target)
 		},
 		OnFinding: func(agent string, finding ai.Finding) {
-			severity := colorYellow
-			if finding.Severity == "critical" {
-				severity = colorRed + colorBold
-			} else if finding.Severity == "high" {
-				severity = colorRed
+			sevColor := colorBlue
+			sevIcon := "ℹ"
+			switch strings.ToLower(finding.Severity) {
+			case "critical":
+				sevColor = colorRed + colorBold
+				sevIcon = "🔴"
+			case "high":
+				sevColor = colorRed
+				sevIcon = "🟠"
+			case "medium":
+				sevColor = colorYellow
+				sevIcon = "🟡"
+			case "low":
+				sevColor = colorCyan
+				sevIcon = "🔵"
 			}
-			fmt.Printf("%s[VULN]%s %s%s%s: %s\n", colorRed, colorReset, severity, finding.Type, colorReset, finding.Description)
+			fmt.Printf("\n%s╔══ VULNERABILITY FOUND ══╗%s\n", sevColor, colorReset)
+			fmt.Printf("%s[%s %s]%s %s (%s)\n", sevColor, sevIcon, strings.ToUpper(finding.Severity), colorReset, finding.Type, agent)
+			fmt.Printf("  %sTarget:%s  %s\n", colorBold, colorReset, finding.Target)
+			fmt.Printf("  %sDesc:%s    %s\n", colorBold, colorReset, finding.Description)
+			if finding.Evidence != "" {
+				// Truncate evidence for terminal display
+				evidence := finding.Evidence
+				if len(evidence) > 200 {
+					evidence = evidence[:200] + "..."
+				}
+				// Remove newlines for cleaner display
+				evidence = strings.ReplaceAll(evidence, "\n", " ")
+				fmt.Printf("  %sEvidence:%s %s\n", colorBold, colorReset, evidence)
+			}
+			fmt.Printf("%s╚═════════════════════════╝%s\n", sevColor, colorReset)
 		},
 		OnCredential: func(agent string, cred ai.Credential) {
 			fmt.Printf("%s[CRED]%s %s:%s @ %s\n", colorGreen+colorBold, colorReset, cred.Username, cred.Password, cred.Service)

@@ -69,6 +69,11 @@ func NewScanner() *Scanner {
 	}
 }
 
+// isIPAddress returns true if the string is an IP address (not a domain name)
+func isIPAddress(s string) bool {
+	return net.ParseIP(s) != nil
+}
+
 func (s *Scanner) SetTimeout(d time.Duration) {
 	s.timeout = d
 }
@@ -81,8 +86,8 @@ func (s *Scanner) SetConcurrency(c int) {
 func DefaultPorts() []int {
 	return []int{
 		21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 143, 389, 443, 445, 993, 995,
-		1433, 1521, 1723, 2222, 3000, 3306, 3389, 5000, 5432, 5601, 5900, 5985,
-		6379, 6443, 8000, 8080, 8081, 8082, 8083, 8084, 8085, 8169, 8443, 8888,
+		1433, 1521, 1723, 2222, 3000, 3306, 3389, 5000, 5001, 5002, 5432, 5601, 5900, 5985,
+		6379, 6443, 8000, 8080, 8081, 8082, 8083, 8084, 8085, 8086, 8094, 8169, 8443, 8888,
 		8922, 8929, 9090, 9200, 10250, 11211, 22022, 27017,
 	}
 }
@@ -103,66 +108,113 @@ func (s *Scanner) FastFullScan(ctx context.Context, target string) (*Host, error
 		State: "down",
 	}
 
-	// Resolve hostname
-	names, err := net.LookupAddr(target)
-	if err == nil && len(names) > 0 {
-		host.Hostname = strings.TrimSuffix(names[0], ".")
-	}
+	// Check if target is a domain name (not IP)
+	isDomain := !isIPAddress(target)
 
 	// Check if target is remote (not localhost)
 	isRemote := !strings.HasPrefix(target, "127.") && target != "localhost"
+	isLocal := !isRemote
 
-	// Use appropriate settings for local vs remote
-	concurrency := 500
-	timeout := 500 * time.Millisecond
-	if isRemote {
-		// Remote hosts need longer timeout but fewer concurrent connections
-		concurrency = 200
-		timeout = 2 * time.Second
+	// Resolve hostname with timeout
+	if !isDomain {
+		resolveCtx, resolveCancel := context.WithTimeout(ctx, 2*time.Second)
+		names, err := net.DefaultResolver.LookupAddr(resolveCtx, target)
+		resolveCancel()
+		if err == nil && len(names) > 0 {
+			host.Hostname = strings.TrimSuffix(names[0], ".")
+		}
+	} else {
+		host.Hostname = target
+		// Resolve domain to IP for scanning
+		resolveCtx, resolveCancel := context.WithTimeout(ctx, 5*time.Second)
+		ips, err := net.DefaultResolver.LookupIP(resolveCtx, "ip4", target)
+		resolveCancel()
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve domain %s: %w", target, err)
+		}
+		if len(ips) > 0 {
+			host.IP = ips[0].String()
+		}
 	}
 
-	// Get top 1000 ports (covers 99%+ of services)
-	ports := TopPorts(1000)
+	// Detect if external domain (likely CDN-protected)
+	isExternalDomain := isDomain && isRemote
 
-	// Add common SSH ports that might not be in top 1000
-	sshPorts := []int{22, 222, 2222, 22022, 2022, 22222, 20022, 10022}
+	// Use appropriate settings based on target type
+	var concurrency int
+	var timeout time.Duration
+	var ports []int
+
+	if isLocal {
+		// Local hosts: aggressive scanning
+		concurrency = 500
+		timeout = 500 * time.Millisecond
+		ports = TopPorts(1000)
+	} else if isExternalDomain {
+		// External domains (likely CDN-protected): only scan web ports
+		// Scanning 1000+ ports on Cloudflare/AWS will hang
+		concurrency = 50
+		timeout = 3 * time.Second
+		ports = []int{80, 443, 8080, 8443, 3000, 5000, 8000, 8888} // Web ports only
+	} else {
+		// Remote IPs (direct hosts): moderate scanning
+		concurrency = 200
+		timeout = 2 * time.Second
+		ports = TopPorts(1000)
+	}
+
+	// Build port set for deduplication
 	portSet := make(map[int]bool)
 	for _, p := range ports {
 		portSet[p] = true
 	}
-	for _, p := range sshPorts {
-		if !portSet[p] {
-			ports = append(ports, p)
-			portSet[p] = true
+
+	// Only add extra ports for non-CDN targets (local or direct remote IPs)
+	if !isExternalDomain {
+		// Add common SSH ports that might not be in top 1000
+		sshPorts := []int{22, 222, 2222, 22022, 2022, 22222, 20022, 10022}
+		for _, p := range sshPorts {
+			if !portSet[p] {
+				ports = append(ports, p)
+				portSet[p] = true
+			}
+		}
+
+		// Add critical database ports that are often misconfigured
+		dbPorts := []int{6379, 27017, 9200, 5601, 11211, 2379}
+		for _, p := range dbPorts {
+			if !portSet[p] {
+				ports = append(ports, p)
+				portSet[p] = true
+			}
+		}
+
+		// Add common HTTP ports for lab/dev environments
+		httpPorts := []int{3000, 5000, 8082, 8083, 8084, 8085, 8888, 8922, 8929, 9000, 9001}
+		for _, p := range httpPorts {
+			if !portSet[p] {
+				ports = append(ports, p)
+				portSet[p] = true
+			}
+		}
+
+		// Add RPC service ports (XML-RPC, JSON-RPC, gRPC, Java RMI, NFS, etc.)
+		rpcPorts := []int{8086, 8087, 50051, 1099, 9999, 111, 2049, 135, 593}
+		for _, p := range rpcPorts {
+			if !portSet[p] {
+				ports = append(ports, p)
+				portSet[p] = true
+			}
 		}
 	}
 
-	// Add critical database ports that are often misconfigured
-	dbPorts := []int{6379, 27017, 9200, 5601, 11211, 2379}
-	for _, p := range dbPorts {
-		if !portSet[p] {
-			ports = append(ports, p)
-			portSet[p] = true
-		}
+	// Apply overall scan timeout to prevent hangs on CDN-protected hosts
+	scanTimeout := 30 * time.Second
+	if isExternalDomain {
+		scanTimeout = 15 * time.Second // Shorter timeout for external domains
 	}
-
-	// Add common HTTP ports for lab/dev environments
-	httpPorts := []int{3000, 5000, 8082, 8083, 8084, 8085, 8888, 8922, 8929, 9000, 9001}
-	for _, p := range httpPorts {
-		if !portSet[p] {
-			ports = append(ports, p)
-			portSet[p] = true
-		}
-	}
-
-	// Add RPC service ports (XML-RPC, JSON-RPC, gRPC, Java RMI, NFS, etc.)
-	rpcPorts := []int{8086, 8087, 50051, 1099, 9999, 111, 2049, 135, 593}
-	for _, p := range rpcPorts {
-		if !portSet[p] {
-			ports = append(ports, p)
-			portSet[p] = true
-		}
-	}
+	scanCtx, scanCancel := context.WithTimeout(ctx, scanTimeout)
+	defer scanCancel()
 
 	// Channel for ports to scan
 	portChan := make(chan int, len(ports))
@@ -176,13 +228,18 @@ func (s *Scanner) FastFullScan(ctx context.Context, target string) (*Host, error
 			defer wg.Done()
 			for port := range portChan {
 				select {
-				case <-ctx.Done():
+				case <-scanCtx.Done():
 					return
 				default:
-					address := fmt.Sprintf("%s:%d", target, port)
+					// Use the resolved IP for scanning, but keep original target in results
+					scanTarget := target
+					if host.IP != "" && host.IP != target {
+						scanTarget = host.IP
+					}
+					address := fmt.Sprintf("%s:%d", scanTarget, port)
 					dialer := net.Dialer{Timeout: timeout}
 
-					conn, err := dialer.DialContext(ctx, "tcp", address)
+					conn, err := dialer.DialContext(scanCtx, "tcp", address)
 					if err == nil {
 						conn.Close()
 						result := Port{
@@ -191,17 +248,25 @@ func (s *Scanner) FastFullScan(ctx context.Context, target string) (*Host, error
 							State:    "open",
 							Service:  identifyService(port),
 						}
-						resultChan <- result
+						select {
+						case resultChan <- result:
+						case <-scanCtx.Done():
+							return
+						}
 					}
 				}
 			}
 		}()
 	}
 
-	// Send top 1000 ports to workers
+	// Send ports to workers
 	go func() {
 		for _, port := range ports {
-			portChan <- port
+			select {
+			case <-scanCtx.Done():
+				break
+			case portChan <- port:
+			}
 		}
 		close(portChan)
 	}()
@@ -232,10 +297,11 @@ func TopPorts(n int) []int {
 		80, 443, 22, 21, 25, 3389, 110, 445, 139, 143, 53, 135, 3306, 8080, 1723,
 		111, 995, 993, 5900, 1025, 587, 8888, 199, 1720, 465, 548, 113, 81, 6001, 10000,
 		514, 5060, 179, 1026, 2000, 8443, 8000, 32768, 554, 26, 1433, 49152, 2001, 515,
-		8008, 49154, 1027, 5666, 646, 5000, 5631, 631, 49153, 8081, 2049, 88, 79, 5800,
+		8008, 49154, 1027, 5666, 646, 5000, 5001, 5002, 5631, 631, 49153, 8081, 2049, 88, 79, 5800,
 		106, 2121, 1110, 49155, 6000, 513, 990, 5357, 427, 49156, 543, 544, 5101, 144,
 		7, 389, 8009, 3128, 444, 9999, 5009, 7070, 5190, 3000, 5432, 1900, 3986, 13,
 		1029, 9, 5051, 6646, 49157, 1028, 873, 1755, 2717, 4899, 9100, 119, 37,
+		8086, 8094, // Lab service ports
 	}
 	if n > len(top) {
 		n = len(top)

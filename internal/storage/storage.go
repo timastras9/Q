@@ -331,16 +331,19 @@ type VulnerabilityRecord struct {
 }
 
 // CredentialRecord represents a stored credential
+// Passwords are hashed with salt for security - plaintext is never stored
 type CredentialRecord struct {
-	ID        int64     `json:"id"`
-	ReportID  int64     `json:"report_id"`
-	Username  string    `json:"username"`
-	Password  string    `json:"password"`
-	Hash      string    `json:"hash"`
-	Type      string    `json:"type"`
-	Source    string    `json:"source"`
-	Service   string    `json:"service"`
-	CreatedAt time.Time `json:"created_at"`
+	ID           int64     `json:"id"`
+	ReportID     int64     `json:"report_id"`
+	Username     string    `json:"username"`
+	PasswordHash string    `json:"password_hash"` // SHA256(salt + password)
+	Salt         string    `json:"salt"`          // Salt used for hashing
+	Display      string    `json:"display"`       // Masked display version
+	Type         string    `json:"type"`
+	Source       string    `json:"source"`
+	Service      string    `json:"service"`
+	Target       string    `json:"target"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // ReportDB manages the storage of pentest reports
@@ -406,11 +409,13 @@ func (r *ReportDB) initSchema() error {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		report_id INTEGER NOT NULL,
 		username TEXT,
-		password TEXT,
-		hash TEXT,
+		password_hash TEXT,
+		salt TEXT,
+		display TEXT,
 		type TEXT,
 		source TEXT,
 		service TEXT,
+		target TEXT,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		FOREIGN KEY (report_id) REFERENCES reports(id)
 	);
@@ -475,11 +480,12 @@ func (r *ReportDB) SaveVulnerability(vuln *VulnerabilityRecord) (int64, error) {
 }
 
 // SaveCredential saves a credential associated with a report
+// Passwords are stored as hashes - plaintext is never persisted
 func (r *ReportDB) SaveCredential(cred *CredentialRecord) (int64, error) {
 	result, err := r.db.Exec(`
-		INSERT INTO credentials (report_id, username, password, hash, type, source, service)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, cred.ReportID, cred.Username, cred.Password, cred.Hash, cred.Type, cred.Source, cred.Service)
+		INSERT INTO credentials (report_id, username, password_hash, salt, display, type, source, service, target)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, cred.ReportID, cred.Username, cred.PasswordHash, cred.Salt, cred.Display, cred.Type, cred.Source, cred.Service, cred.Target)
 	if err != nil {
 		return 0, err
 	}
@@ -586,7 +592,7 @@ func (r *ReportDB) GetVulnerabilitiesByReport(reportID int64) ([]*VulnerabilityR
 // GetCredentialsByReport returns all credentials for a report
 func (r *ReportDB) GetCredentialsByReport(reportID int64) ([]*CredentialRecord, error) {
 	rows, err := r.db.Query(`
-		SELECT id, report_id, username, password, hash, type, source, service, created_at
+		SELECT id, report_id, username, password_hash, salt, display, type, source, service, target, created_at
 		FROM credentials WHERE report_id = ?
 	`, reportID)
 	if err != nil {
@@ -597,7 +603,7 @@ func (r *ReportDB) GetCredentialsByReport(reportID int64) ([]*CredentialRecord, 
 	var creds []*CredentialRecord
 	for rows.Next() {
 		c := &CredentialRecord{}
-		err := rows.Scan(&c.ID, &c.ReportID, &c.Username, &c.Password, &c.Hash, &c.Type, &c.Source, &c.Service, &c.CreatedAt)
+		err := rows.Scan(&c.ID, &c.ReportID, &c.Username, &c.PasswordHash, &c.Salt, &c.Display, &c.Type, &c.Source, &c.Service, &c.Target, &c.CreatedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -609,7 +615,7 @@ func (r *ReportDB) GetCredentialsByReport(reportID int64) ([]*CredentialRecord, 
 // SearchCredentials searches for credentials by username or source
 func (r *ReportDB) SearchCredentials(query string) ([]*CredentialRecord, error) {
 	rows, err := r.db.Query(`
-		SELECT c.id, c.report_id, c.username, c.password, c.hash, c.type, c.source, c.service, c.created_at
+		SELECT c.id, c.report_id, c.username, c.password_hash, c.salt, c.display, c.type, c.source, c.service, c.target, c.created_at
 		FROM credentials c
 		WHERE c.username LIKE ? OR c.source LIKE ? OR c.service LIKE ?
 		ORDER BY c.created_at DESC
@@ -622,7 +628,7 @@ func (r *ReportDB) SearchCredentials(query string) ([]*CredentialRecord, error) 
 	var creds []*CredentialRecord
 	for rows.Next() {
 		c := &CredentialRecord{}
-		err := rows.Scan(&c.ID, &c.ReportID, &c.Username, &c.Password, &c.Hash, &c.Type, &c.Source, &c.Service, &c.CreatedAt)
+		err := rows.Scan(&c.ID, &c.ReportID, &c.Username, &c.PasswordHash, &c.Salt, &c.Display, &c.Type, &c.Source, &c.Service, &c.Target, &c.CreatedAt)
 		if err != nil {
 			return nil, err
 		}

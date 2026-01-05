@@ -1,0 +1,61 @@
+# Sentinel - Autonomous Security Daemon
+# =============================================
+# Inspired by Apple's Sentinel/XNU kernel security philosophy
+#
+# Install: cp sentinel.service /etc/systemd/system/
+#          systemctl daemon-reload
+#          systemctl enable --now sentinel
+
+[Unit]
+Description=Sentinel - Autonomous Security Daemon
+Documentation=https://github.com/pentestai/sentinel
+After=network.target network-online.target
+Wants=network-online.target
+
+# Restart on failure
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/python3 /opt/sentinel/daemon.py
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Security hardening (Sentinel philosophy: minimal attack surface)
+User=root
+Group=root
+NoNewPrivileges=false
+ProtectSystem=false
+ProtectHome=read-only
+PrivateTmp=true
+ProtectKernelTunables=false
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+# Resource limits
+MemoryLimit=512M
+CPUQuota=50%
+
+# Restart policy - self-healing
+Restart=always
+RestartSec=30
+TimeoutStartSec=120
+TimeoutStopSec=30
+
+# Watchdog - daemon must ping every 5 minutes or restart
+WatchdogSec=300
+
+# Environment
+Environment=PYTHONUNBUFFERED=1
+Environment=SENTINEL_LOG_LEVEL=INFO
+
+# Working directory
+WorkingDirectory=/opt/sentinel
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sentinel
+
+[Install]
+WantedBy=multi-user.target

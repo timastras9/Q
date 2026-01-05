@@ -1,0 +1,25 @@
+# Sentinel - Threat Intel API
+# ===================================
+
+FROM python:3.11-slim
+
+LABEL maintainer="PentestAI"
+LABEL description="Sentinel Threat Intel API"
+
+ENV PYTHONUNBUFFERED=1
+
+# Install dependencies
+RUN pip install --no-cache-dir requests anthropic
+
+# Create directories
+RUN mkdir -p /opt/sentinel/data
+
+# Copy API script
+COPY api.py /opt/sentinel/api.py
+RUN chmod +x /opt/sentinel/api.py
+
+WORKDIR /opt/sentinel
+
+EXPOSE 8095
+
+CMD ["python3", "/opt/sentinel/api.py"]

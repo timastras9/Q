@@ -269,6 +269,10 @@ func (a *AEI) updateContextPatterns() {
 			if len(chains[0].Actions) < maxActions {
 				maxActions = len(chains[0].Actions)
 			}
+			// Initialize map if nil
+			if a.ContextPatterns == nil {
+				a.ContextPatterns = make(map[string][]string)
+			}
 			a.ContextPatterns[sig] = chains[0].Actions[:maxActions]
 		}
 	}
