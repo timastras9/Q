@@ -98,7 +98,8 @@ RUN pip3 install --no-cache-dir \
     requests \
     watchdog \
     psutil \
-    python-dotenv
+    python-dotenv \
+    rich
 
 # Create Sentinel directory structure
 RUN mkdir -p /opt/sentinel/{config,data,baseline,logs} \
@@ -167,6 +168,12 @@ case "$1" in
     config)
         nano /etc/sentinel/config.json
         ;;
+    dashboard)
+        cd /opt/sentinel && python3 dashboard.py
+        ;;
+    dashboard-demo)
+        cd /opt/sentinel && python3 dashboard.py --demo
+        ;;
     version)
         echo "Sentinel Linux v1.0.0 (guardian)"
         echo "Security daemon version: $(grep -o 'VERSION.*' /opt/sentinel/daemon.py 2>/dev/null | head -1 || echo 'unknown')"
@@ -190,6 +197,7 @@ case "$1" in
         echo "  stop        - Stop the daemon"
         echo "  restart     - Restart the daemon"
         echo "  logs        - View daemon logs"
+        echo "  dashboard   - Interactive security dashboard"
         echo "  scan        - Run manual security scan"
         echo "  scan-quick  - Run quick scan (5 min intervals)"
         echo "  scan-deep   - Run deep scan (comprehensive)"
