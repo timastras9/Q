@@ -1,10 +1,10 @@
 #!/bin/bash
-# Sentinel - Installation Script
+# Spectre - Installation Script
 # ======================================
-# Installs Sentinel on Linux (Alpine, Rocky, Debian/Ubuntu)
+# Installs Spectre on Linux (Alpine, Rocky, Debian/Ubuntu)
 #
 # Usage:
-#   curl -sSL https://raw.githubusercontent.com/pentestai/sentinel/main/install.sh | sudo bash
+#   curl -sSL https://raw.githubusercontent.com/pentestai/spectre/main/install.sh | sudo bash
 #   or
 #   sudo ./install.sh
 
@@ -19,7 +19,7 @@ NC='\033[0m'
 
 echo -e "${BLUE}"
 echo "╔═══════════════════════════════════════════════════════════╗"
-echo "║           Sentinel - Installation                         ║"
+echo "║           Spectre - Installation                         ║"
 echo "║     Autonomous Security Daemon for Linux                  ║"
 echo "║     Autonomous Self-Healing Security                      ║"
 echo "╚═══════════════════════════════════════════════════════════╝"
@@ -52,8 +52,8 @@ detect_os() {
 detect_os
 
 echo -e "${GREEN}[1/6]${NC} Creating directory structure..."
-mkdir -p /opt/sentinel/{config,data,scripts}
-mkdir -p /var/log/sentinel
+mkdir -p /opt/spectre/{config,data,scripts}
+mkdir -p /var/log/spectre
 
 echo -e "${GREEN}[2/6]${NC} Installing system dependencies..."
 case $PKG_MGR in
@@ -121,24 +121,24 @@ case $PKG_MGR in
         ;;
 esac
 
-echo -e "${GREEN}[5/6]${NC} Installing Sentinel daemon..."
+echo -e "${GREEN}[5/6]${NC} Installing Spectre daemon..."
 # Copy daemon script (assuming it's in the same directory)
 if [[ -f "$(dirname "$0")/daemon.py" ]]; then
-    cp "$(dirname "$0")/daemon.py" /opt/sentinel/daemon.py
-elif [[ -f "/tmp/sentinel/daemon.py" ]]; then
-    cp /tmp/sentinel/daemon.py /opt/sentinel/daemon.py
+    cp "$(dirname "$0")/daemon.py" /opt/spectre/daemon.py
+elif [[ -f "/tmp/spectre/daemon.py" ]]; then
+    cp /tmp/spectre/daemon.py /opt/spectre/daemon.py
 else
     echo -e "${YELLOW}Warning: daemon.py not found, downloading from GitHub...${NC}"
     # In production, this would download from a release
-    echo "Please copy daemon.py to /opt/sentinel/daemon.py manually"
+    echo "Please copy daemon.py to /opt/spectre/daemon.py manually"
 fi
 
-chmod +x /opt/sentinel/daemon.py
+chmod +x /opt/spectre/daemon.py
 
 echo -e "${GREEN}[6/6]${NC} Installing systemd service..."
-cat > /etc/systemd/system/sentinel.service << 'EOF'
+cat > /etc/systemd/system/spectre.service << 'EOF'
 [Unit]
-Description=Sentinel - Autonomous Security Daemon
+Description=Spectre - Autonomous Security Daemon
 After=network.target network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=300
@@ -146,7 +146,7 @@ StartLimitBurst=5
 
 [Service]
 Type=notify
-ExecStart=/usr/bin/python3 /opt/sentinel/daemon.py
+ExecStart=/usr/bin/python3 /opt/spectre/daemon.py
 User=root
 Group=root
 Restart=always
@@ -155,10 +155,10 @@ TimeoutStartSec=120
 TimeoutStopSec=30
 WatchdogSec=300
 Environment=PYTHONUNBUFFERED=1
-WorkingDirectory=/opt/sentinel
+WorkingDirectory=/opt/spectre
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=sentinel
+SyslogIdentifier=spectre
 
 [Install]
 WantedBy=multi-user.target
@@ -180,16 +180,16 @@ echo -e "${GREEN}╔════════════════════
 echo -e "${GREEN}║           Installation Complete!                          ║${NC}"
 echo -e "${GREEN}╚═══════════════════════════════════════════════════════════╝${NC}"
 echo ""
-echo "To start Sentinel:"
-echo -e "  ${BLUE}systemctl enable --now sentinel${NC}"
+echo "To start Spectre:"
+echo -e "  ${BLUE}systemctl enable --now spectre${NC}"
 echo ""
 echo "To view logs:"
-echo -e "  ${BLUE}journalctl -u sentinel -f${NC}"
+echo -e "  ${BLUE}journalctl -u spectre -f${NC}"
 echo ""
 echo "To run a manual scan:"
-echo -e "  ${BLUE}/opt/sentinel/daemon.py${NC}"
+echo -e "  ${BLUE}/opt/spectre/daemon.py${NC}"
 echo ""
-echo "Scan reports are saved to: /opt/sentinel/data/"
-echo "Logs are saved to: /var/log/sentinel/"
+echo "Scan reports are saved to: /opt/spectre/data/"
+echo "Logs are saved to: /var/log/spectre/"
 echo ""
 echo -e "${GREEN}Philosophy: Secure by default, self-healing, minimal attack surface${NC}"

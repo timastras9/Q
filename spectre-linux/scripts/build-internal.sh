@@ -1,14 +1,14 @@
 #!/bin/bash
 #
-# Sentinel Linux Internal Build Script
+# Spectre Linux Internal Build Script
 # =====================================
 # Runs inside the build container
 #
 
 set -e
 
-PROJECT_ROOT="/sentinel-linux"
-BUILD_ROOT="/tmp/sentinel-build"
+PROJECT_ROOT="/spectre-linux"
+BUILD_ROOT="/tmp/spectre-build"
 CACHE_DIR="/cache"
 
 source "${PROJECT_ROOT}/config/build.conf"
@@ -56,8 +56,8 @@ build_kernel() {
     tar xf "${KERNEL_TARBALL}" --strip-components=1
 
     # Use our hardened kernel config
-    if [ -f "${PROJECT_ROOT}/kernel/config-sentinel" ]; then
-        cp "${PROJECT_ROOT}/kernel/config-sentinel" .config
+    if [ -f "${PROJECT_ROOT}/kernel/config-spectre" ]; then
+        cp "${PROJECT_ROOT}/kernel/config-spectre" .config
     else
         # Generate default config with security options
         make defconfig
@@ -143,26 +143,26 @@ create_rootfs() {
 }
 
 # =============================================================================
-# Step 4: Install Sentinel
+# Step 4: Install Spectre
 # =============================================================================
-install_sentinel() {
-    step "Installing Sentinel daemon"
+install_spectre() {
+    step "Installing Spectre daemon"
 
     ROOTFS="${BUILD_ROOT}/rootfs"
 
-    # Create Sentinel directories
-    mkdir -p "${ROOTFS}/opt/sentinel"/{config,data,baseline}
-    mkdir -p "${ROOTFS}/etc/sentinel"
-    mkdir -p "${ROOTFS}/var/log/sentinel"
-    mkdir -p "${ROOTFS}/var/lib/sentinel"
+    # Create Spectre directories
+    mkdir -p "${ROOTFS}/opt/spectre"/{config,data,baseline}
+    mkdir -p "${ROOTFS}/etc/spectre"
+    mkdir -p "${ROOTFS}/var/log/spectre"
+    mkdir -p "${ROOTFS}/var/lib/spectre"
 
-    # Copy Sentinel daemon
-    cp "${PROJECT_ROOT}/../sentinel/daemon.py" "${ROOTFS}/opt/sentinel/daemon.py"
-    cp "${PROJECT_ROOT}/../sentinel/config/sentinel.json" "${ROOTFS}/etc/sentinel/config.json"
-    chmod +x "${ROOTFS}/opt/sentinel/daemon.py"
+    # Copy Spectre daemon
+    cp "${PROJECT_ROOT}/../spectre/daemon.py" "${ROOTFS}/opt/spectre/daemon.py"
+    cp "${PROJECT_ROOT}/../spectre/config/spectre.json" "${ROOTFS}/etc/spectre/config.json"
+    chmod +x "${ROOTFS}/opt/spectre/daemon.py"
 
     # Create symlink for config
-    ln -sf /etc/sentinel/config.json "${ROOTFS}/opt/sentinel/config/sentinel.json"
+    ln -sf /etc/spectre/config.json "${ROOTFS}/opt/spectre/config/spectre.json"
 
     # Install Python dependencies
     chroot "${ROOTFS}" /bin/sh -c "
@@ -170,14 +170,14 @@ install_sentinel() {
     "
 
     # Create OpenRC service
-    cat > "${ROOTFS}/etc/init.d/sentinel" << 'SERVICE'
+    cat > "${ROOTFS}/etc/init.d/spectre" << 'SERVICE'
 #!/sbin/openrc-run
 
-name="sentinel"
-description="Sentinel Security Daemon"
+name="spectre"
+description="Spectre Security Daemon"
 command="/usr/bin/python3"
-command_args="/opt/sentinel/daemon.py"
-pidfile="/run/sentinel.pid"
+command_args="/opt/spectre/daemon.py"
+pidfile="/run/spectre.pid"
 command_background="yes"
 
 depend() {
@@ -186,83 +186,83 @@ depend() {
 }
 
 start_pre() {
-    mkdir -p /var/log/sentinel
-    mkdir -p /var/lib/sentinel
+    mkdir -p /var/log/spectre
+    mkdir -p /var/lib/spectre
 }
 SERVICE
-    chmod +x "${ROOTFS}/etc/init.d/sentinel"
+    chmod +x "${ROOTFS}/etc/init.d/spectre"
 
     # Enable service
     chroot "${ROOTFS}" /bin/sh -c "
-        rc-update add sentinel default
+        rc-update add spectre default
     "
 
-    # Create sentinelctl command
-    cat > "${ROOTFS}/usr/local/bin/sentinelctl" << 'SENTINELCTL'
+    # Create spectrectl command
+    cat > "${ROOTFS}/usr/local/bin/spectrectl" << 'SPECTRECTL'
 #!/bin/bash
-# Sentinel Control Utility
+# Spectre Control Utility
 
 case "$1" in
     status)
-        rc-service sentinel status
+        rc-service spectre status
         ;;
     start)
-        rc-service sentinel start
+        rc-service spectre start
         ;;
     stop)
-        rc-service sentinel stop
+        rc-service spectre stop
         ;;
     restart)
-        rc-service sentinel restart
+        rc-service spectre restart
         ;;
     logs)
-        tail -f /var/log/sentinel/sentinel.log
+        tail -f /var/log/spectre/spectre.log
         ;;
     scan)
         shift
-        python3 /opt/sentinel/daemon.py --scan "$@"
+        python3 /opt/spectre/daemon.py --scan "$@"
         ;;
     config)
-        nano /etc/sentinel/config.json
+        nano /etc/spectre/config.json
         ;;
     *)
-        echo "Sentinel Linux Control"
-        echo "Usage: sentinelctl {status|start|stop|restart|logs|scan|config}"
+        echo "Spectre Linux Control"
+        echo "Usage: spectrectl {status|start|stop|restart|logs|scan|config}"
         ;;
 esac
-SENTINELCTL
-    chmod +x "${ROOTFS}/usr/local/bin/sentinelctl"
+SPECTRECTL
+    chmod +x "${ROOTFS}/usr/local/bin/spectrectl"
 
-    log "Sentinel installed"
+    log "Spectre installed"
 }
 
 # =============================================================================
 # Step 5: Configure system
 # =============================================================================
 configure_system() {
-    step "Configuring Sentinel Linux"
+    step "Configuring Spectre Linux"
 
     ROOTFS="${BUILD_ROOT}/rootfs"
 
     # Set hostname
-    echo "sentinel" > "${ROOTFS}/etc/hostname"
+    echo "spectre" > "${ROOTFS}/etc/hostname"
 
     # Configure hosts
     cat > "${ROOTFS}/etc/hosts" << 'HOSTS'
-127.0.0.1   localhost sentinel
-::1         localhost sentinel
+127.0.0.1   localhost spectre
+::1         localhost spectre
 HOSTS
 
     # Create /etc/os-release
     cat > "${ROOTFS}/etc/os-release" << OSRELEASE
-NAME="Sentinel Linux"
-VERSION="${SENTINEL_VERSION}"
-ID=sentinel
+NAME="Spectre Linux"
+VERSION="${SPECTRE_VERSION}"
+ID=spectre
 ID_LIKE=alpine
-VERSION_ID=${SENTINEL_VERSION}
-PRETTY_NAME="Sentinel Linux ${SENTINEL_VERSION} (${SENTINEL_CODENAME})"
-HOME_URL="https://github.com/pentestai/sentinel-linux"
-BUG_REPORT_URL="https://github.com/pentestai/sentinel-linux/issues"
+VERSION_ID=${SPECTRE_VERSION}
+PRETTY_NAME="Spectre Linux ${SPECTRE_VERSION} (${SPECTRE_CODENAME})"
+HOME_URL="https://github.com/pentestai/spectre-linux"
+BUG_REPORT_URL="https://github.com/pentestai/spectre-linux/issues"
 OSRELEASE
 
     # Create issue banner
@@ -275,7 +275,7 @@ OSRELEASE
 ███████║███████╗██║ ╚████║   ██║   ██║██║ ╚████║███████╗███████╗
 ╚══════╝╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝
 
-          Sentinel Linux - AI-Powered Security
+          Spectre Linux - AI-Powered Security
           Version: \v | Kernel: \r | Arch: \m
 
 ISSUE
@@ -283,15 +283,15 @@ ISSUE
     # MOTD
     cat > "${ROOTFS}/etc/motd" << 'MOTD'
 
-Welcome to Sentinel Linux - Security that thinks for itself.
+Welcome to Spectre Linux - Security that thinks for itself.
 
 Quick Start:
-  sentinelctl status    - Check Sentinel daemon status
-  sentinelctl logs      - View security logs
-  sentinelctl scan      - Run manual security scan
-  sentinelctl config    - Edit configuration
+  spectrectl status    - Check Spectre daemon status
+  spectrectl logs      - View security logs
+  spectrectl scan      - Run manual security scan
+  spectrectl config    - Edit configuration
 
-Documentation: https://github.com/pentestai/sentinel-linux
+Documentation: https://github.com/pentestai/spectre-linux
 
 MOTD
 
@@ -316,10 +316,10 @@ SSHD
         rc-update add audit default
     "
 
-    # Create sentinel user
+    # Create spectre user
     chroot "${ROOTFS}" /bin/sh -c "
-        adduser -D -s /bin/bash -G wheel sentinel
-        echo 'sentinel:sentinel' | chpasswd
+        adduser -D -s /bin/bash -G wheel spectre
+        echo 'spectre:spectre' | chpasswd
         echo '%wheel ALL=(ALL) ALL' >> /etc/sudoers
     "
 
@@ -350,7 +350,7 @@ mount -t proc none /proc
 mount -t sysfs none /sys
 mount -t devtmpfs none /dev
 
-echo "Sentinel Linux Bootloader"
+echo "Spectre Linux Bootloader"
 echo "========================="
 
 # Find and mount root filesystem
@@ -410,17 +410,17 @@ create_iso() {
 set timeout=5
 set default=0
 
-menuentry "Sentinel Linux" {
+menuentry "Spectre Linux" {
     linux /boot/vmlinuz quiet
     initrd /boot/initramfs.gz
 }
 
-menuentry "Sentinel Linux (Recovery Mode)" {
+menuentry "Spectre Linux (Recovery Mode)" {
     linux /boot/vmlinuz single
     initrd /boot/initramfs.gz
 }
 
-menuentry "Sentinel Linux (Debug)" {
+menuentry "Spectre Linux (Debug)" {
     linux /boot/vmlinuz debug
     initrd /boot/initramfs.gz
 }
@@ -428,9 +428,9 @@ GRUB
 
     # Create ISO
     log "Building ISO image..."
-    grub-mkrescue -o "${PROJECT_ROOT}/iso/sentinel-linux-${SENTINEL_VERSION}.iso" "${ISO_DIR}"
+    grub-mkrescue -o "${PROJECT_ROOT}/iso/spectre-linux-${SPECTRE_VERSION}.iso" "${ISO_DIR}"
 
-    log "ISO created: sentinel-linux-${SENTINEL_VERSION}.iso"
+    log "ISO created: spectre-linux-${SPECTRE_VERSION}.iso"
 }
 
 # =============================================================================
@@ -438,14 +438,14 @@ GRUB
 # =============================================================================
 main() {
     echo "=========================================="
-    echo "  Sentinel Linux Build System"
-    echo "  Version: ${SENTINEL_VERSION}"
+    echo "  Spectre Linux Build System"
+    echo "  Version: ${SPECTRE_VERSION}"
     echo "=========================================="
 
     prepare_build
     build_kernel
     create_rootfs
-    install_sentinel
+    install_spectre
     configure_system
     create_initramfs
     create_iso

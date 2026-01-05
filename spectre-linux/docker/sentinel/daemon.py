@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Sentinel - Autonomous Security Daemon
+Spectre - Autonomous Security Daemon
 ======================================
 
 An autonomous, self-healing security daemon for Linux servers.
@@ -50,15 +50,15 @@ import urllib.error
 import ssl
 
 # =============================================================================
-# Sentinel-Style Constants (Linux naming conventions)
+# Spectre-Style Constants (Linux naming conventions)
 # =============================================================================
 
-kSentinelVersion = "2.0.0"
-kSentinelPrefix = "[Sentinel]"
-kConfigPath = Path("/opt/sentinel/config")
-kSentinelDataPath = Path("/opt/sentinel/data")
-kSentinelLogPath = Path("/var/log/sentinel")
-kSentinelBaselinePath = Path("/opt/sentinel/baseline")
+kSpectreVersion = "2.0.0"
+kSpectrePrefix = "[Spectre]"
+kConfigPath = Path("/opt/spectre/config")
+kSpectreDataPath = Path("/opt/spectre/data")
+kSpectreLogPath = Path("/var/log/spectre")
+kSpectreBaselinePath = Path("/opt/spectre/baseline")
 
 # Threat Intelligence URLs
 kCISA_KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
@@ -129,11 +129,11 @@ kSuspiciousProcessPatterns = [
 ]
 
 # =============================================================================
-# Sentinel Context Structures
+# Spectre Context Structures
 # =============================================================================
 
 class Severity(Enum):
-    """Severity levels following Sentinel security model"""
+    """Severity levels following Spectre security model"""
     CRITICAL = "critical"
     HIGH = "high"
     MEDIUM = "medium"
@@ -215,17 +215,17 @@ class ScanContext:
     threats: List[Threat] = field(default_factory=list)
     mitigations: List[Mitigation] = field(default_factory=list)
     autorecon_failure_count: int = 0
-    kSentinelStatus: str = "initializing"
+    kSpectreStatus: str = "initializing"
 
 # =============================================================================
 # Logging Configuration
 # =============================================================================
 
 class Logger:
-    """Sentinel-style logging with syslog integration"""
+    """Spectre-style logging with syslog integration"""
 
     def __init__(self):
-        self.logger = logging.getLogger("Sentinel")
+        self.logger = logging.getLogger("Spectre")
         self.logger.setLevel(logging.DEBUG)
 
         # Prevent duplicate handlers
@@ -238,18 +238,18 @@ class Logger:
                 from logging.handlers import SysLogHandler
                 syslog_handler = SysLogHandler(address='/dev/log')
                 syslog_handler.setLevel(logging.INFO)
-                syslog_format = logging.Formatter(f'{kSentinelPrefix} %(levelname)s: %(message)s')
+                syslog_format = logging.Formatter(f'{kSpectrePrefix} %(levelname)s: %(message)s')
                 syslog_handler.setFormatter(syslog_format)
                 self.logger.addHandler(syslog_handler)
             except Exception:
                 pass
 
         # File handler
-        kSentinelLogPath.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(kSentinelLogPath / "sentinel.log")
+        kSpectreLogPath.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(kSpectreLogPath / "spectre.log")
         file_handler.setLevel(logging.DEBUG)
         file_format = logging.Formatter(
-            '%(asctime)s ' + kSentinelPrefix + ' %(levelname)s: %(message)s',
+            '%(asctime)s ' + kSpectrePrefix + ' %(levelname)s: %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
         )
         file_handler.setFormatter(file_format)
@@ -262,7 +262,7 @@ class Logger:
         self.logger.addHandler(console_handler)
 
         # Alert log (critical events only)
-        alert_handler = logging.FileHandler(kSentinelLogPath / "alerts.log")
+        alert_handler = logging.FileHandler(kSpectreLogPath / "alerts.log")
         alert_handler.setLevel(logging.WARNING)
         alert_handler.setFormatter(file_format)
         self.logger.addHandler(alert_handler)
@@ -314,7 +314,7 @@ class Logger:
         self.logger.critical(msg)
 
 # Global logger
-sentinel_log = Logger()
+spectre_log = Logger()
 
 # =============================================================================
 # Configuration Manager
@@ -325,7 +325,7 @@ class Config:
 
     DEFAULT_CONFIG = {
         "version": "2.0.0",
-        "sentinel": {
+        "spectre": {
             "quick_scan_interval_minutes": 5,
             "standard_scan_interval_hours": 1,
             "deep_scan_interval_hours": 4,
@@ -361,7 +361,7 @@ class Config:
         },
         "expected_ports": [22, 80, 443],
         "excluded_packages": ["kernel", "glibc", "systemd"],
-        "excluded_processes": ["sshd", "systemd", "sentinel"],
+        "excluded_processes": ["sshd", "systemd", "spectre"],
         "threat_intel": {
             "cisa_kev_enabled": True,
             "epss_enabled": True,
@@ -386,7 +386,7 @@ class Config:
     }
 
     def __init__(self):
-        self.config_path = kConfigPath / "sentinel.json"
+        self.config_path = kConfigPath / "spectre.json"
         self.config = self._load_config()
 
     def _load_config(self) -> Dict:
@@ -398,7 +398,7 @@ class Config:
                     # Merge with defaults for any missing keys
                     return self._merge_config(self.DEFAULT_CONFIG, config)
             except Exception as e:
-                sentinel_log.error(f"Failed to load config: {e}")
+                spectre_log.error(f"Failed to load config: {e}")
 
         # Create default config
         self._save_config(self.DEFAULT_CONFIG)
@@ -494,37 +494,37 @@ class DependencyManager:
     @classmethod
     def ensure_dependencies(cls) -> bool:
         """Install missing dependencies"""
-        sentinel_log.info("Checking system dependencies...")
+        spectre_log.info("Checking system dependencies...")
 
         pkg_mgr = cls._detect_package_manager()
         if not pkg_mgr:
-            sentinel_log.warning("No supported package manager found, skipping system packages")
+            spectre_log.warning("No supported package manager found, skipping system packages")
             # Still try to check pip packages
         else:
-            sentinel_log.info(f"Detected package manager: {pkg_mgr}")
+            spectre_log.info(f"Detected package manager: {pkg_mgr}")
             packages = cls.PACKAGE_MAP.get(pkg_mgr, {})
             for pkg_name, pkg_actual in packages.items():
                 if not cls._is_package_installed(pkg_actual, pkg_mgr):
-                    sentinel_log.audit(
+                    spectre_log.audit(
                         "DEPENDENCY_INSTALL",
                         {"package": pkg_actual, "manager": pkg_mgr},
-                        f"Package {pkg_actual} required for Sentinel operation"
+                        f"Package {pkg_actual} required for Spectre operation"
                     )
                     if not cls._install_package(pkg_mgr, pkg_actual):
-                        sentinel_log.debug(f"Optional package {pkg_actual} not installed")
+                        spectre_log.debug(f"Optional package {pkg_actual} not installed")
 
         for pkg in cls.REQUIRED_PIP:
             try:
                 __import__(pkg.replace("-", "_"))
             except ImportError:
-                sentinel_log.audit(
+                spectre_log.audit(
                     "PIP_DEPENDENCY_INSTALL",
                     {"package": pkg},
                     f"Python package {pkg} required for API integration"
                 )
                 cls._install_pip_package(pkg)
 
-        sentinel_log.info("Dependency check complete")
+        spectre_log.info("Dependency check complete")
         return True
 
     @classmethod
@@ -601,7 +601,7 @@ class DependencyManager:
             )
             return result.returncode == 0
         except Exception as e:
-            sentinel_log.debug(f"Failed to install {package}: {e}")
+            spectre_log.debug(f"Failed to install {package}: {e}")
             return False
 
     @staticmethod
@@ -614,7 +614,7 @@ class DependencyManager:
             )
             return True
         except Exception as e:
-            sentinel_log.error(f"Failed to install pip package {package}: {e}")
+            spectre_log.error(f"Failed to install pip package {package}: {e}")
             return False
 
 # =============================================================================
@@ -636,7 +636,7 @@ class ThreatIntel:
         if self.kev_last_update and datetime.utcnow() - self.kev_last_update < timedelta(hours=1):
             return self.kev_cache
 
-        sentinel_log.info("Fetching CISA KEV catalog...")
+        spectre_log.info("Fetching CISA KEV catalog...")
         try:
             ctx = ssl.create_default_context()
             with urllib.request.urlopen(kCISA_KEV_URL, context=ctx, timeout=30) as response:
@@ -648,7 +648,7 @@ class ThreatIntel:
             }
             self.kev_last_update = datetime.utcnow()
 
-            sentinel_log.audit(
+            spectre_log.audit(
                 "THREAT_INTEL_UPDATE",
                 {"source": "CISA_KEV", "count": len(self.kev_cache)},
                 "Updated CISA Known Exploited Vulnerabilities catalog"
@@ -656,7 +656,7 @@ class ThreatIntel:
             return self.kev_cache
 
         except Exception as e:
-            sentinel_log.error(f"Failed to fetch CISA KEV: {e}")
+            spectre_log.error(f"Failed to fetch CISA KEV: {e}")
             return self.kev_cache
 
     def get_epss_score(self, cve_id: str) -> float:
@@ -676,7 +676,7 @@ class ThreatIntel:
                 return score
 
         except Exception as e:
-            sentinel_log.debug(f"Failed to fetch EPSS for {cve_id}: {e}")
+            spectre_log.debug(f"Failed to fetch EPSS for {cve_id}: {e}")
 
         return 0.0
 
@@ -689,7 +689,7 @@ class ThreatIntel:
             url = f"{kNVD_API_URL}?cveId={cve_id}"
             ctx = ssl.create_default_context()
             req = urllib.request.Request(url)
-            req.add_header('User-Agent', 'Sentinel/2.0')
+            req.add_header('User-Agent', 'Spectre/2.0')
 
             with urllib.request.urlopen(req, context=ctx, timeout=15) as response:
                 data = json.loads(response.read().decode())
@@ -700,7 +700,7 @@ class ThreatIntel:
                 return vuln_data
 
         except Exception as e:
-            sentinel_log.debug(f"Failed to fetch NVD data for {cve_id}: {e}")
+            spectre_log.debug(f"Failed to fetch NVD data for {cve_id}: {e}")
 
         return None
 
@@ -745,7 +745,7 @@ Provide:
             return message.content[0].text
 
         except Exception as e:
-            sentinel_log.debug(f"AI analysis unavailable: {e}")
+            spectre_log.debug(f"AI analysis unavailable: {e}")
             return None
 
 # =============================================================================
@@ -769,9 +769,9 @@ class AISecurityEngine:
             try:
                 import anthropic
                 self.client = anthropic.Anthropic(api_key=self.api_key)
-                sentinel_log.info("AI Security Engine initialized with Claude")
+                spectre_log.info("AI Security Engine initialized with Claude")
             except Exception as e:
-                sentinel_log.warning(f"AI Security Engine unavailable: {e}")
+                spectre_log.warning(f"AI Security Engine unavailable: {e}")
 
     def _call_claude(self, prompt: str, max_tokens: int = 1000) -> Optional[str]:
         """Make a call to Claude API"""
@@ -785,7 +785,7 @@ class AISecurityEngine:
             )
             return message.content[0].text
         except Exception as e:
-            sentinel_log.error(f"Claude API error: {e}")
+            spectre_log.error(f"Claude API error: {e}")
             return None
 
     def correlate_threats(self, current_threat: Dict, recent_threats: List[Dict]) -> Dict:
@@ -1028,19 +1028,19 @@ class FileMonitor:
 
     def _load_baseline(self):
         """Load or create baseline file hashes"""
-        baseline_file = kSentinelBaselinePath / "file_hashes.json"
+        baseline_file = kSpectreBaselinePath / "file_hashes.json"
 
         if baseline_file.exists():
             try:
                 with open(baseline_file) as f:
                     self.file_hashes = json.load(f)
-                sentinel_log.info(f"Loaded baseline with {len(self.file_hashes)} file hashes")
+                spectre_log.info(f"Loaded baseline with {len(self.file_hashes)} file hashes")
                 return
             except Exception as e:
-                sentinel_log.warning(f"Failed to load baseline: {e}")
+                spectre_log.warning(f"Failed to load baseline: {e}")
 
         # Create new baseline
-        sentinel_log.info("Creating file integrity baseline...")
+        spectre_log.info("Creating file integrity baseline...")
         for path in kCriticalPaths:
             if os.path.isfile(path):
                 self.file_hashes[path] = self._compute_hash(path)
@@ -1054,10 +1054,10 @@ class FileMonitor:
                     pass
 
         # Save baseline
-        kSentinelBaselinePath.mkdir(parents=True, exist_ok=True)
+        kSpectreBaselinePath.mkdir(parents=True, exist_ok=True)
         with open(baseline_file, 'w') as f:
             json.dump(self.file_hashes, f)
-        sentinel_log.audit(
+        spectre_log.audit(
             "BASELINE_CREATED",
             {"files": len(self.file_hashes)},
             "Created file integrity baseline"
@@ -1066,7 +1066,7 @@ class FileMonitor:
     def start(self):
         """Start file monitoring"""
         if not self.config.get("continuous_monitoring", "file_monitoring", default=True):
-            sentinel_log.info("File monitoring disabled in config")
+            spectre_log.info("File monitoring disabled in config")
             return
 
         self._load_baseline()
@@ -1078,7 +1078,7 @@ class FileMonitor:
             self.inotify_fd = libc.inotify_init1(0)
 
             if self.inotify_fd < 0:
-                sentinel_log.warning("Failed to initialize inotify, using polling instead")
+                spectre_log.warning("Failed to initialize inotify, using polling instead")
                 self._start_polling()
                 return
 
@@ -1094,15 +1094,15 @@ class FileMonitor:
                         if wd >= 0:
                             self.watch_descriptors[wd] = path
                     except Exception as e:
-                        sentinel_log.debug(f"Failed to watch {path}: {e}")
+                        spectre_log.debug(f"Failed to watch {path}: {e}")
 
             self.running = True
             self.thread = threading.Thread(target=self._monitor_loop, daemon=True)
             self.thread.start()
-            sentinel_log.info(f"File monitoring started for {len(self.watch_descriptors)} paths")
+            spectre_log.info(f"File monitoring started for {len(self.watch_descriptors)} paths")
 
         except Exception as e:
-            sentinel_log.warning(f"inotify unavailable: {e}, using polling")
+            spectre_log.warning(f"inotify unavailable: {e}, using polling")
             self._start_polling()
 
     def _start_polling(self):
@@ -1129,7 +1129,7 @@ class FileMonitor:
                             self.file_hashes[filepath] = new_hash
                 time.sleep(30)
             except Exception as e:
-                sentinel_log.error(f"Polling error: {e}")
+                spectre_log.error(f"Polling error: {e}")
                 time.sleep(60)
 
     def _monitor_loop(self):
@@ -1170,7 +1170,7 @@ class FileMonitor:
 
             except Exception as e:
                 if self.running:
-                    sentinel_log.error(f"File monitor error: {e}")
+                    spectre_log.error(f"File monitor error: {e}")
                 time.sleep(1)
 
     def _report_threat(self, event_type: str, filepath: str, evidence: Dict):
@@ -1193,7 +1193,7 @@ class FileMonitor:
         )
 
         self.threat_queue.put(threat)
-        sentinel_log.alert(f"File integrity: {event_type} - {filepath}", threat)
+        spectre_log.alert(f"File integrity: {event_type} - {filepath}", threat)
 
     def stop(self):
         """Stop file monitoring"""
@@ -1220,7 +1220,7 @@ class ProcessMonitor:
     def start(self):
         """Start process monitoring"""
         if not self.config.get("continuous_monitoring", "process_monitoring", default=True):
-            sentinel_log.info("Process monitoring disabled in config")
+            spectre_log.info("Process monitoring disabled in config")
             return
 
         # Get initial process list
@@ -1229,7 +1229,7 @@ class ProcessMonitor:
         self.running = True
         self.thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self.thread.start()
-        sentinel_log.info("Process monitoring started")
+        spectre_log.info("Process monitoring started")
 
     def _refresh_known_pids(self):
         """Get current process list"""
@@ -1334,7 +1334,7 @@ class ProcessMonitor:
                 time.sleep(2)  # Check every 2 seconds
 
             except Exception as e:
-                sentinel_log.error(f"Process monitor error: {e}")
+                spectre_log.error(f"Process monitor error: {e}")
                 time.sleep(10)
 
     def _report_threat(self, proc_info: Dict, reason: str):
@@ -1350,7 +1350,7 @@ class ProcessMonitor:
         )
 
         self.threat_queue.put(threat)
-        sentinel_log.alert(f"Suspicious process: PID {proc_info['pid']} - {reason}", threat)
+        spectre_log.alert(f"Suspicious process: PID {proc_info['pid']} - {reason}", threat)
 
     def stop(self):
         """Stop process monitoring"""
@@ -1382,13 +1382,13 @@ class NetworkMonitor:
     def start(self):
         """Start network monitoring"""
         if not self.config.get("continuous_monitoring", "network_monitoring", default=True):
-            sentinel_log.info("Network monitoring disabled in config")
+            spectre_log.info("Network monitoring disabled in config")
             return
 
         self.running = True
         self.thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self.thread.start()
-        sentinel_log.info("Network monitoring started")
+        spectre_log.info("Network monitoring started")
 
     def _get_connections(self) -> List[Dict]:
         """Get current network connections"""
@@ -1432,7 +1432,7 @@ class NetworkMonitor:
                     })
 
         except Exception as e:
-            sentinel_log.debug(f"Failed to read connections: {e}")
+            spectre_log.debug(f"Failed to read connections: {e}")
 
         return connections
 
@@ -1494,7 +1494,7 @@ class NetworkMonitor:
                 time.sleep(5)  # Check every 5 seconds
 
             except Exception as e:
-                sentinel_log.error(f"Network monitor error: {e}")
+                spectre_log.error(f"Network monitor error: {e}")
                 time.sleep(30)
 
     def _report_threat(self, conn: Dict, reason: str):
@@ -1510,7 +1510,7 @@ class NetworkMonitor:
         )
 
         self.threat_queue.put(threat)
-        sentinel_log.alert(f"Network anomaly: {reason}", threat)
+        spectre_log.alert(f"Network anomaly: {reason}", threat)
 
     def stop(self):
         """Stop network monitoring"""
@@ -1536,13 +1536,13 @@ class AuthMonitor:
     def start(self):
         """Start auth monitoring"""
         if not self.config.get("continuous_monitoring", "auth_monitoring", default=True):
-            sentinel_log.info("Auth monitoring disabled in config")
+            spectre_log.info("Auth monitoring disabled in config")
             return
 
         self.running = True
         self.thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self.thread.start()
-        sentinel_log.info("Auth monitoring started")
+        spectre_log.info("Auth monitoring started")
 
     def _monitor_loop(self):
         """Monitor auth logs for failures"""
@@ -1551,7 +1551,7 @@ class AuthMonitor:
             auth_log = "/var/log/auth.log"
 
         if not os.path.exists(auth_log):
-            sentinel_log.warning("No auth log found, using journalctl")
+            spectre_log.warning("No auth log found, using journalctl")
             self._monitor_journalctl()
             return
 
@@ -1568,7 +1568,7 @@ class AuthMonitor:
                 time.sleep(2)
 
             except Exception as e:
-                sentinel_log.error(f"Auth monitor error: {e}")
+                spectre_log.error(f"Auth monitor error: {e}")
                 time.sleep(30)
 
     def _monitor_journalctl(self):
@@ -1589,7 +1589,7 @@ class AuthMonitor:
             proc.terminate()
 
         except Exception as e:
-            sentinel_log.error(f"Journalctl monitor error: {e}")
+            spectre_log.error(f"Journalctl monitor error: {e}")
 
     def _process_auth_line(self, line: str):
         """Process a line from auth log"""
@@ -1641,7 +1641,7 @@ class AuthMonitor:
         )
 
         self.threat_queue.put(threat)
-        sentinel_log.alert(f"Brute force: {count} failures from {ip} for user {user}", threat)
+        spectre_log.alert(f"Brute force: {count} failures from {ip} for user {user}", threat)
 
     def stop(self):
         """Stop auth monitoring"""
@@ -1701,10 +1701,10 @@ class IntrusionDetector:
         self.running = True
         self.thread = threading.Thread(target=self._detection_loop, daemon=True)
         self.thread.start()
-        sentinel_log.info("=" * 60)
-        sentinel_log.info("INTRUSION DETECTION SYSTEM ACTIVATED")
-        sentinel_log.info("=" * 60)
-        sentinel_log.info("Monitoring for: Port scans, Brute force, Suspicious connections, SSL/TLS anomalies")
+        spectre_log.info("=" * 60)
+        spectre_log.info("INTRUSION DETECTION SYSTEM ACTIVATED")
+        spectre_log.info("=" * 60)
+        spectre_log.info("Monitoring for: Port scans, Brute force, Suspicious connections, SSL/TLS anomalies")
 
     def _detection_loop(self):
         """Main detection loop"""
@@ -1732,7 +1732,7 @@ class IntrusionDetector:
                 time.sleep(1)  # Check every second for real-time detection
 
             except Exception as e:
-                sentinel_log.error(f"IDS error: {e}")
+                spectre_log.error(f"IDS error: {e}")
                 time.sleep(5)
 
     def _get_all_connections(self) -> List[Dict]:
@@ -1773,7 +1773,7 @@ class IntrusionDetector:
                         })
 
         except Exception as e:
-            sentinel_log.debug(f"Failed to get connections: {e}")
+            spectre_log.debug(f"Failed to get connections: {e}")
 
         return connections
 
@@ -1854,7 +1854,7 @@ class IntrusionDetector:
             self._check_ssl_on_cleartext_ports()
 
         except Exception as e:
-            sentinel_log.debug(f"SSL detection error: {e}")
+            spectre_log.debug(f"SSL detection error: {e}")
 
     def _check_unexpected_ssl(self):
         """Check for SSL listeners on unexpected ports"""
@@ -1881,7 +1881,7 @@ class IntrusionDetector:
                             self._alert_unexpected_ssl_port(port)
 
         except Exception as e:
-            sentinel_log.debug(f"Unexpected SSL check error: {e}")
+            spectre_log.debug(f"Unexpected SSL check error: {e}")
 
     def _is_ssl_port(self, port: int) -> bool:
         """Check if a port is serving SSL/TLS"""
@@ -1935,15 +1935,15 @@ class IntrusionDetector:
         if not self._can_alert(alert_key):
             return
 
-        sentinel_log.info("")
-        sentinel_log.info("🔐" + "=" * 58 + "🔐")
-        sentinel_log.info("🔐  SSL/TLS ALERT: UNEXPECTED SSL PORT DETECTED")
-        sentinel_log.info("🔐" + "=" * 58 + "🔐")
-        sentinel_log.info(f"🔐  Port: {port}")
-        sentinel_log.info("🔐  Risk: Rogue service or potential MITM intercept point")
-        sentinel_log.info("🔐  Action: Investigate unknown SSL listener")
-        sentinel_log.info("🔐" + "=" * 58 + "🔐")
-        sentinel_log.info("")
+        spectre_log.info("")
+        spectre_log.info("🔐" + "=" * 58 + "🔐")
+        spectre_log.info("🔐  SSL/TLS ALERT: UNEXPECTED SSL PORT DETECTED")
+        spectre_log.info("🔐" + "=" * 58 + "🔐")
+        spectre_log.info(f"🔐  Port: {port}")
+        spectre_log.info("🔐  Risk: Rogue service or potential MITM intercept point")
+        spectre_log.info("🔐  Action: Investigate unknown SSL listener")
+        spectre_log.info("🔐" + "=" * 58 + "🔐")
+        spectre_log.info("")
 
         threat = Threat(
             threat_id=f"IDS-SSL-UNEXPECTED-{port}-{int(time.time())}",
@@ -1962,15 +1962,15 @@ class IntrusionDetector:
         if not self._can_alert(f"ssl-repeat-{ip}"):
             return
 
-        sentinel_log.info("")
-        sentinel_log.info("🔐" + "=" * 58 + "🔐")
-        sentinel_log.info("🔐  SSL/TLS ALERT: REPEATED SSL CONNECTIONS")
-        sentinel_log.info("🔐" + "=" * 58 + "🔐")
-        sentinel_log.info(f"🔐  Source IP: {ip}")
-        sentinel_log.info(f"🔐  SSL Connections: {count} in {self.SSL_REPEAT_WINDOW}s")
-        sentinel_log.info("🔐  Risk: SSL enumeration, cert harvesting, or brute force")
-        sentinel_log.info("🔐" + "=" * 58 + "🔐")
-        sentinel_log.info("")
+        spectre_log.info("")
+        spectre_log.info("🔐" + "=" * 58 + "🔐")
+        spectre_log.info("🔐  SSL/TLS ALERT: REPEATED SSL CONNECTIONS")
+        spectre_log.info("🔐" + "=" * 58 + "🔐")
+        spectre_log.info(f"🔐  Source IP: {ip}")
+        spectre_log.info(f"🔐  SSL Connections: {count} in {self.SSL_REPEAT_WINDOW}s")
+        spectre_log.info("🔐  Risk: SSL enumeration, cert harvesting, or brute force")
+        spectre_log.info("🔐" + "=" * 58 + "🔐")
+        spectre_log.info("")
 
         threat = Threat(
             threat_id=f"IDS-SSL-REPEAT-{ip}-{int(time.time())}",
@@ -1990,16 +1990,16 @@ class IntrusionDetector:
         if not self._can_alert(alert_key):
             return
 
-        sentinel_log.info("")
-        sentinel_log.info("🚨🔐" + "=" * 54 + "🔐🚨")
-        sentinel_log.info("🚨🔐  CRITICAL: SSL ON CLEARTEXT PORT - POSSIBLE MITM")
-        sentinel_log.info("🚨🔐" + "=" * 54 + "🔐🚨")
-        sentinel_log.info(f"🚨🔐  Port: {port} (should be cleartext)")
-        sentinel_log.info(f"🚨🔐  Source IP: {ip}")
-        sentinel_log.info("🚨🔐  Risk: ACTIVE MAN-IN-THE-MIDDLE ATTACK")
-        sentinel_log.info("🚨🔐  Action: IMMEDIATE INVESTIGATION REQUIRED")
-        sentinel_log.info("🚨🔐" + "=" * 54 + "🔐🚨")
-        sentinel_log.info("")
+        spectre_log.info("")
+        spectre_log.info("🚨🔐" + "=" * 54 + "🔐🚨")
+        spectre_log.info("🚨🔐  CRITICAL: SSL ON CLEARTEXT PORT - POSSIBLE MITM")
+        spectre_log.info("🚨🔐" + "=" * 54 + "🔐🚨")
+        spectre_log.info(f"🚨🔐  Port: {port} (should be cleartext)")
+        spectre_log.info(f"🚨🔐  Source IP: {ip}")
+        spectre_log.info("🚨🔐  Risk: ACTIVE MAN-IN-THE-MIDDLE ATTACK")
+        spectre_log.info("🚨🔐  Action: IMMEDIATE INVESTIGATION REQUIRED")
+        spectre_log.info("🚨🔐" + "=" * 54 + "🔐🚨")
+        spectre_log.info("")
 
         threat = Threat(
             threat_id=f"IDS-SSL-MITM-{port}-{int(time.time())}",
@@ -2021,16 +2021,16 @@ class IntrusionDetector:
         # Create prominent alert
         port_list = sorted(list(ports))[:20]  # Show first 20 ports
 
-        sentinel_log.info("")
-        sentinel_log.info("🚨" + "=" * 58 + "🚨")
-        sentinel_log.info("🚨  INTRUSION ALERT: PORT SCAN DETECTED")
-        sentinel_log.info("🚨" + "=" * 58 + "🚨")
-        sentinel_log.info(f"🚨  Source IP: {ip}")
-        sentinel_log.info(f"🚨  Ports scanned: {len(ports)}")
-        sentinel_log.info(f"🚨  Ports: {port_list}")
-        sentinel_log.info("🚨  Action: Monitoring and logging")
-        sentinel_log.info("🚨" + "=" * 58 + "🚨")
-        sentinel_log.info("")
+        spectre_log.info("")
+        spectre_log.info("🚨" + "=" * 58 + "🚨")
+        spectre_log.info("🚨  INTRUSION ALERT: PORT SCAN DETECTED")
+        spectre_log.info("🚨" + "=" * 58 + "🚨")
+        spectre_log.info(f"🚨  Source IP: {ip}")
+        spectre_log.info(f"🚨  Ports scanned: {len(ports)}")
+        spectre_log.info(f"🚨  Ports: {port_list}")
+        spectre_log.info("🚨  Action: Monitoring and logging")
+        spectre_log.info("🚨" + "=" * 58 + "🚨")
+        spectre_log.info("")
 
         threat = Threat(
             threat_id=f"IDS-PORTSCAN-{ip}-{int(time.time())}",
@@ -2050,15 +2050,15 @@ class IntrusionDetector:
         if not self._can_alert(ip):
             return
 
-        sentinel_log.info("")
-        sentinel_log.info("🚨" + "=" * 58 + "🚨")
-        sentinel_log.info("🚨  INTRUSION ALERT: CONNECTION FLOOD DETECTED")
-        sentinel_log.info("🚨" + "=" * 58 + "🚨")
-        sentinel_log.info(f"🚨  Source IP: {ip}")
-        sentinel_log.info(f"🚨  Connections/min: {count}")
-        sentinel_log.info("🚨  Possible DoS or aggressive scanning")
-        sentinel_log.info("🚨" + "=" * 58 + "🚨")
-        sentinel_log.info("")
+        spectre_log.info("")
+        spectre_log.info("🚨" + "=" * 58 + "🚨")
+        spectre_log.info("🚨  INTRUSION ALERT: CONNECTION FLOOD DETECTED")
+        spectre_log.info("🚨" + "=" * 58 + "🚨")
+        spectre_log.info(f"🚨  Source IP: {ip}")
+        spectre_log.info(f"🚨  Connections/min: {count}")
+        spectre_log.info("🚨  Possible DoS or aggressive scanning")
+        spectre_log.info("🚨" + "=" * 58 + "🚨")
+        spectre_log.info("")
 
         threat = Threat(
             threat_id=f"IDS-FLOOD-{ip}-{int(time.time())}",
@@ -2097,18 +2097,18 @@ class IntrusionDetector:
 
     def report_auth_failure(self, ip: str, user: str):
         """Called by AuthMonitor to report auth failures for correlation"""
-        sentinel_log.info("")
-        sentinel_log.info("⚠️" + "=" * 58 + "⚠️")
-        sentinel_log.info(f"⚠️  AUTH FAILURE: {user}@{ip}")
-        sentinel_log.info("⚠️" + "=" * 58 + "⚠️")
-        sentinel_log.info("")
+        spectre_log.info("")
+        spectre_log.info("⚠️" + "=" * 58 + "⚠️")
+        spectre_log.info(f"⚠️  AUTH FAILURE: {user}@{ip}")
+        spectre_log.info("⚠️" + "=" * 58 + "⚠️")
+        spectre_log.info("")
 
     def stop(self):
         """Stop intrusion detection"""
         self.running = False
         if self.thread:
             self.thread.join(timeout=5)
-        sentinel_log.info("Intrusion Detection System stopped")
+        spectre_log.info("Intrusion Detection System stopped")
 
 
 # =============================================================================
@@ -2124,7 +2124,7 @@ class Scanner:
 
     def quick_scan(self) -> List[Vulnerability]:
         """Quick scan - fast checks only"""
-        sentinel_log.info("Running quick scan...")
+        spectre_log.info("Running quick scan...")
         vulnerabilities = []
 
         # Check for critical security updates only
@@ -2137,7 +2137,7 @@ class Scanner:
 
     def standard_scan(self) -> List[Vulnerability]:
         """Standard scan - package and port scanning"""
-        sentinel_log.info("Running standard scan...")
+        spectre_log.info("Running standard scan...")
         vulnerabilities = []
 
         # Scan packages
@@ -2156,7 +2156,7 @@ class Scanner:
 
     def deep_scan(self) -> List[Vulnerability]:
         """Deep scan - comprehensive security audit"""
-        sentinel_log.info("Running deep scan...")
+        spectre_log.info("Running deep scan...")
         vulnerabilities = []
 
         # All standard scans
@@ -2184,7 +2184,7 @@ class Scanner:
 
     def scan_installed_packages(self) -> List[Vulnerability]:
         """Scan installed packages for known vulnerabilities"""
-        sentinel_log.info("Scanning installed packages...")
+        spectre_log.info("Scanning installed packages...")
         vulnerabilities = []
 
         pkg_mgr = DependencyManager._detect_package_manager()
@@ -2299,20 +2299,20 @@ class Scanner:
                             )
                             vulnerabilities.append(vuln)
 
-            sentinel_log.audit(
+            spectre_log.audit(
                 "PACKAGE_SCAN_COMPLETE",
                 {"vulnerabilities_found": len(vulnerabilities), "pkg_mgr": pkg_mgr},
                 "Completed package vulnerability scan"
             )
 
         except Exception as e:
-            sentinel_log.error(f"Package scan failed: {e}")
+            spectre_log.error(f"Package scan failed: {e}")
 
         return vulnerabilities
 
     def scan_with_lynis(self) -> List[Vulnerability]:
         """Run Lynis security audit"""
-        sentinel_log.info("Running Lynis audit...")
+        spectre_log.info("Running Lynis audit...")
         vulnerabilities = []
 
         try:
@@ -2343,22 +2343,22 @@ class Scanner:
                     )
                     vulnerabilities.append(vuln)
 
-            sentinel_log.audit(
+            spectre_log.audit(
                 "LYNIS_SCAN_COMPLETE",
                 {"findings": len(vulnerabilities)},
                 "Completed Lynis security audit"
             )
 
         except FileNotFoundError:
-            sentinel_log.warning("Lynis not installed")
+            spectre_log.warning("Lynis not installed")
         except Exception as e:
-            sentinel_log.error(f"Lynis scan failed: {e}")
+            spectre_log.error(f"Lynis scan failed: {e}")
 
         return vulnerabilities
 
     def scan_open_ports(self) -> List[Vulnerability]:
         """Scan for unexpected open ports"""
-        sentinel_log.info("Scanning local ports...")
+        spectre_log.info("Scanning local ports...")
         vulnerabilities = []
         expected_ports = set(self.config.get("expected_ports", default=[22, 80, 443]))
 
@@ -2380,7 +2380,7 @@ class Scanner:
                         service = service_match.group(1) if service_match else "unknown"
 
                         vuln = Vulnerability(
-                            cve_id=f"SENTINEL-OPEN-PORT-{port}",
+                            cve_id=f"SPECTRE-OPEN-PORT-{port}",
                             description=f"Unexpected open port {port} ({service})",
                             severity=Severity.MEDIUM,
                             cvss_score=5.0,
@@ -2395,14 +2395,14 @@ class Scanner:
                         )
                         vulnerabilities.append(vuln)
 
-            sentinel_log.audit(
+            spectre_log.audit(
                 "PORT_SCAN_COMPLETE",
                 {"unexpected_ports": len(vulnerabilities)},
                 "Completed local port scan"
             )
 
         except Exception as e:
-            sentinel_log.error(f"Port scan failed: {e}")
+            spectre_log.error(f"Port scan failed: {e}")
 
         return vulnerabilities
 
@@ -2494,7 +2494,7 @@ class Scanner:
                     vulnerabilities.append(vuln)
 
         except Exception as e:
-            sentinel_log.debug(f"Critical update check failed: {e}")
+            spectre_log.debug(f"Critical update check failed: {e}")
 
         return vulnerabilities
 
@@ -2523,7 +2523,7 @@ class Scanner:
             for line in result.stdout.strip().split("\n"):
                 if line and line not in safe_suid:
                     vuln = Vulnerability(
-                        cve_id=f"SENTINEL-SUID-{hashlib.md5(line.encode()).hexdigest()[:8]}",
+                        cve_id=f"SPECTRE-SUID-{hashlib.md5(line.encode()).hexdigest()[:8]}",
                         description=f"Unusual SUID binary: {line}",
                         severity=Severity.HIGH,
                         cvss_score=7.0,
@@ -2539,7 +2539,7 @@ class Scanner:
                     vulnerabilities.append(vuln)
 
         except Exception as e:
-            sentinel_log.debug(f"SUID scan failed: {e}")
+            spectre_log.debug(f"SUID scan failed: {e}")
 
         return vulnerabilities
 
@@ -2564,7 +2564,7 @@ class Scanner:
                 for line in result.stdout.strip().split("\n"):
                     if line:
                         vuln = Vulnerability(
-                            cve_id=f"SENTINEL-WRITABLE-{hashlib.md5(line.encode()).hexdigest()[:8]}",
+                            cve_id=f"SPECTRE-WRITABLE-{hashlib.md5(line.encode()).hexdigest()[:8]}",
                             description=f"World-writable file: {line}",
                             severity=Severity.MEDIUM,
                             cvss_score=5.0,
@@ -2580,7 +2580,7 @@ class Scanner:
                         vulnerabilities.append(vuln)
 
         except Exception as e:
-            sentinel_log.debug(f"World-writable scan failed: {e}")
+            spectre_log.debug(f"World-writable scan failed: {e}")
 
         return vulnerabilities
 
@@ -2607,7 +2607,7 @@ class Scanner:
             for pattern, desc, severity in checks:
                 if pattern in config:
                     vuln = Vulnerability(
-                        cve_id=f"SENTINEL-SSH-{hashlib.md5(pattern.encode()).hexdigest()[:8]}",
+                        cve_id=f"SPECTRE-SSH-{hashlib.md5(pattern.encode()).hexdigest()[:8]}",
                         description=f"SSH config issue: {desc}",
                         severity=severity,
                         cvss_score=6.0 if severity == Severity.HIGH else 4.0,
@@ -2623,7 +2623,7 @@ class Scanner:
                     vulnerabilities.append(vuln)
 
         except Exception as e:
-            sentinel_log.debug(f"SSH config scan failed: {e}")
+            spectre_log.debug(f"SSH config scan failed: {e}")
 
         return vulnerabilities
 
@@ -2643,7 +2643,7 @@ class Scanner:
             for line in result.stdout.split("\n"):
                 if "Warning" in line:
                     vuln = Vulnerability(
-                        cve_id=f"SENTINEL-ROOTKIT-{hashlib.md5(line.encode()).hexdigest()[:8]}",
+                        cve_id=f"SPECTRE-ROOTKIT-{hashlib.md5(line.encode()).hexdigest()[:8]}",
                         description=f"Rootkit check warning: {line.strip()}",
                         severity=Severity.CRITICAL,
                         cvss_score=10.0,
@@ -2659,9 +2659,9 @@ class Scanner:
                     vulnerabilities.append(vuln)
 
         except FileNotFoundError:
-            sentinel_log.debug("rkhunter not installed")
+            spectre_log.debug("rkhunter not installed")
         except Exception as e:
-            sentinel_log.debug(f"Rootkit scan failed: {e}")
+            spectre_log.debug(f"Rootkit scan failed: {e}")
 
         return vulnerabilities
 
@@ -2686,7 +2686,7 @@ class Scanner:
                         content = f.read()
                     if check_func(content):
                         vuln = Vulnerability(
-                            cve_id=f"SENTINEL-CIS-{hashlib.md5(description.encode()).hexdigest()[:8]}",
+                            cve_id=f"SPECTRE-CIS-{hashlib.md5(description.encode()).hexdigest()[:8]}",
                             description=f"CIS benchmark fail: {description}",
                             severity=Severity.HIGH,
                             cvss_score=7.0,
@@ -2721,7 +2721,7 @@ class Scanner:
                         # System accounts with shells
                         if uid < 1000 and uid != 0 and shell not in ['/sbin/nologin', '/bin/false', '/usr/sbin/nologin']:
                             vuln = Vulnerability(
-                                cve_id=f"SENTINEL-USER-{hashlib.md5(user.encode()).hexdigest()[:8]}",
+                                cve_id=f"SPECTRE-USER-{hashlib.md5(user.encode()).hexdigest()[:8]}",
                                 description=f"System account {user} has login shell: {shell}",
                                 severity=Severity.MEDIUM,
                                 cvss_score=5.0,
@@ -2737,7 +2737,7 @@ class Scanner:
                             vulnerabilities.append(vuln)
 
         except Exception as e:
-            sentinel_log.debug(f"User security scan failed: {e}")
+            spectre_log.debug(f"User security scan failed: {e}")
 
         return vulnerabilities
 
@@ -2782,7 +2782,7 @@ class Scanner:
 
             if update_available:
                 vuln = Vulnerability(
-                    cve_id=f"SENTINEL-KERNEL-UPDATE",
+                    cve_id=f"SPECTRE-KERNEL-UPDATE",
                     description=f"Kernel update available (current: {kernel_version})",
                     severity=Severity.HIGH,
                     cvss_score=7.5,
@@ -2798,7 +2798,7 @@ class Scanner:
                 vulnerabilities.append(vuln)
 
         except Exception as e:
-            sentinel_log.debug(f"Kernel vuln scan failed: {e}")
+            spectre_log.debug(f"Kernel vuln scan failed: {e}")
 
         return vulnerabilities
 
@@ -2833,7 +2833,7 @@ class Scanner:
                     for pattern in suspicious_patterns:
                         if re.search(pattern, content, re.IGNORECASE):
                             vuln = Vulnerability(
-                                cve_id=f"SENTINEL-CRON-{hashlib.md5(filepath.encode()).hexdigest()[:8]}",
+                                cve_id=f"SPECTRE-CRON-{hashlib.md5(filepath.encode()).hexdigest()[:8]}",
                                 description=f"Suspicious cron entry in {filepath}",
                                 severity=Severity.HIGH,
                                 cvss_score=8.0,
@@ -2867,7 +2867,7 @@ class Remediator:
 
     def remediate_vulnerability(self, vuln: Vulnerability, context: ScanContext) -> Mitigation:
         """Remediate a vulnerability"""
-        sentinel_log.info(f"Remediating vulnerability {vuln.cve_id}...")
+        spectre_log.info(f"Remediating vulnerability {vuln.cve_id}...")
 
         if vuln.fixed_version and vuln.fixed_version not in ["Unknown", None]:
             if self.config.get("auto_remediation", "patch_critical", default=True):
@@ -2882,7 +2882,7 @@ class Remediator:
 
     def remediate_threat(self, threat: Threat) -> Mitigation:
         """Remediate a real-time detected threat"""
-        sentinel_log.info(f"Remediating threat {threat.threat_id}...")
+        spectre_log.info(f"Remediating threat {threat.threat_id}...")
 
         if threat.threat_type == "suspicious_process":
             return self._kill_process(threat)
@@ -2897,7 +2897,7 @@ class Remediator:
 
     def _apply_patch(self, vuln: Vulnerability) -> Mitigation:
         """Apply official patch"""
-        sentinel_log.audit(
+        spectre_log.audit(
             "PATCH_ATTEMPT",
             {"cve": vuln.cve_id, "package": vuln.affected_package},
             f"Attempting to patch {vuln.cve_id}"
@@ -2980,7 +2980,7 @@ class Remediator:
         if not pid:
             return self._manual_required(threat.threat_id, "No PID in threat evidence")
 
-        sentinel_log.audit(
+        spectre_log.audit(
             "PROCESS_KILL",
             {"pid": pid, "cmdline": threat.evidence.get("cmdline", "")[:100]},
             f"Killing suspicious process {pid}"
@@ -3016,7 +3016,7 @@ class Remediator:
         if not ip:
             return self._manual_required(threat.threat_id, "No IP in threat evidence")
 
-        sentinel_log.audit(
+        spectre_log.audit(
             "IP_BLOCK",
             {"ip": ip},
             f"Blocking IP {ip} due to brute force attack"
@@ -3054,14 +3054,14 @@ class Remediator:
         if not filepath or not os.path.exists(filepath):
             return self._manual_required(threat.threat_id, "File not found")
 
-        sentinel_log.audit(
+        spectre_log.audit(
             "FILE_QUARANTINE",
             {"path": filepath},
             f"Quarantining suspicious file {filepath}"
         )
 
         try:
-            quarantine_dir = kSentinelDataPath / "quarantine"
+            quarantine_dir = kSpectreDataPath / "quarantine"
             quarantine_dir.mkdir(parents=True, exist_ok=True)
 
             # Create quarantine name with timestamp
@@ -3096,7 +3096,7 @@ class Remediator:
         if not remote_ip:
             return self._manual_required(threat.threat_id, "No remote IP in evidence")
 
-        sentinel_log.audit(
+        spectre_log.audit(
             "CONNECTION_BLOCK",
             {"remote_ip": remote_ip, "remote_port": remote_port},
             f"Blocking connection to {remote_ip}:{remote_port}"
@@ -3234,11 +3234,11 @@ class Remediator:
                 )
                 urllib.request.urlopen(req, timeout=10)
             except Exception as e:
-                sentinel_log.error(f"Webhook alert failed: {e}")
+                spectre_log.error(f"Webhook alert failed: {e}")
 
     def _manual_required(self, vuln_id: str, reason: str) -> Mitigation:
         """Mark as requiring manual intervention"""
-        sentinel_log.warning(f"Manual intervention required for {vuln_id}: {reason}")
+        spectre_log.warning(f"Manual intervention required for {vuln_id}: {reason}")
 
         return Mitigation(
             vuln_id=vuln_id,
@@ -3254,8 +3254,8 @@ class Remediator:
 # Main Daemon
 # =============================================================================
 
-class Sentinel:
-    """Main Sentinel daemon with continuous monitoring"""
+class Spectre:
+    """Main Spectre daemon with continuous monitoring"""
 
     def __init__(self):
         self.running = True
@@ -3287,12 +3287,12 @@ class Sentinel:
 
         # Create directories
         kConfigPath.mkdir(parents=True, exist_ok=True)
-        kSentinelDataPath.mkdir(parents=True, exist_ok=True)
-        kSentinelBaselinePath.mkdir(parents=True, exist_ok=True)
+        kSpectreDataPath.mkdir(parents=True, exist_ok=True)
+        kSpectreBaselinePath.mkdir(parents=True, exist_ok=True)
 
     def _handle_shutdown(self, signum, frame):
         """Graceful shutdown"""
-        sentinel_log.info("Received shutdown signal...")
+        spectre_log.info("Received shutdown signal...")
         self.running = False
 
     def _get_system_context(self) -> str:
@@ -3319,11 +3319,11 @@ class Sentinel:
             started_at=datetime.utcnow().isoformat(),
             hostname=socket.gethostname(),
             ip_address=socket.gethostbyname(socket.gethostname()),
-            kSentinelStatus="scanning"
+            kSpectreStatus="scanning"
         )
 
-        sentinel_log.info(f"Starting {scan_type.value} autorecon scan {scan_id}")
-        sentinel_log.audit(
+        spectre_log.info(f"Starting {scan_type.value} autorecon scan {scan_id}")
+        spectre_log.audit(
             "AUTORECON_START",
             {"scan_id": scan_id, "scan_type": scan_type.value},
             f"Initiating {scan_type.value} security scan"
@@ -3348,7 +3348,7 @@ class Sentinel:
             elif scan_type == ScanType.DEEP:
                 context.vulnerabilities.extend(self.scanner.deep_scan())
 
-            sentinel_log.info(f"Discovered {len(context.vulnerabilities)} vulnerabilities")
+            spectre_log.info(f"Discovered {len(context.vulnerabilities)} vulnerabilities")
 
             # Sort by risk
             context.vulnerabilities.sort(
@@ -3364,20 +3364,20 @@ class Sentinel:
                 )
 
                 if should_remediate and self.config.get("auto_remediation", "enabled", default=True):
-                    sentinel_log.info(f"Remediating {vuln.cve_id}")
+                    spectre_log.info(f"Remediating {vuln.cve_id}")
 
                     ai_analysis = self.threat_intel.get_ai_analysis(vuln, self._get_system_context())
                     if ai_analysis:
-                        sentinel_log.audit("AI_ANALYSIS", {"cve": vuln.cve_id}, ai_analysis[:500])
+                        spectre_log.audit("AI_ANALYSIS", {"cve": vuln.cve_id}, ai_analysis[:500])
 
                     mitigation = self.remediator.remediate_vulnerability(vuln, context)
                     context.mitigations.append(mitigation)
 
             # Save report
             context.completed_at = datetime.utcnow().isoformat()
-            context.kSentinelStatus = "completed"
+            context.kSpectreStatus = "completed"
 
-            report_path = kSentinelDataPath / f"scan_{scan_id}.json"
+            report_path = kSpectreDataPath / f"scan_{scan_id}.json"
             with open(report_path, "w") as f:
                 report = {
                     "scan_id": context.scan_id,
@@ -3400,7 +3400,7 @@ class Sentinel:
                 }
                 json.dump(report, f, indent=2, default=str)
 
-            sentinel_log.audit(
+            spectre_log.audit(
                 "AUTORECON_COMPLETE",
                 {
                     "scan_id": scan_id,
@@ -3413,7 +3413,7 @@ class Sentinel:
 
             # AI Security Posture Analysis (on deep scans)
             if scan_type == ScanType.DEEP and self.ai_engine.client:
-                sentinel_log.info("Running AI security posture analysis...")
+                spectre_log.info("Running AI security posture analysis...")
                 posture = self.ai_engine.analyze_security_posture({
                     "total_vulnerabilities": len(context.vulnerabilities),
                     "critical": sum(1 for v in context.vulnerabilities if v.severity == Severity.CRITICAL),
@@ -3425,7 +3425,7 @@ class Sentinel:
                 })
 
                 if posture.get("risk_score"):
-                    sentinel_log.audit(
+                    spectre_log.audit(
                         "AI_SECURITY_POSTURE",
                         {
                             "risk_score": posture.get("risk_score"),
@@ -3436,7 +3436,7 @@ class Sentinel:
                     )
 
                     # Save AI analysis to report
-                    ai_report_path = kSentinelDataPath / f"ai_analysis_{scan_id}.json"
+                    ai_report_path = kSpectreDataPath / f"ai_analysis_{scan_id}.json"
                     with open(ai_report_path, "w") as f:
                         json.dump(posture, f, indent=2, default=str)
 
@@ -3444,8 +3444,8 @@ class Sentinel:
 
         except Exception as e:
             context.autorecon_failure_count += 1
-            context.kSentinelStatus = "error"
-            sentinel_log.error(f"Autorecon failed: {e}")
+            context.kSpectreStatus = "error"
+            spectre_log.error(f"Autorecon failed: {e}")
             raise
 
     def _process_threats(self):
@@ -3454,7 +3454,7 @@ class Sentinel:
             try:
                 threat = self.threat_queue.get(timeout=1)
 
-                sentinel_log.info(f"Processing threat: {threat.threat_id} ({threat.threat_type})")
+                spectre_log.info(f"Processing threat: {threat.threat_id} ({threat.threat_type})")
 
                 # Convert threat to dict for AI processing
                 threat_dict = {
@@ -3477,11 +3477,11 @@ class Sentinel:
                         self.ai_engine.threat_history
                     )
                     if correlation.get("attack_chain_detected"):
-                        sentinel_log.alert(
+                        spectre_log.alert(
                             f"ATTACK CHAIN DETECTED: {correlation.get('pattern_name', 'Unknown')} "
                             f"(confidence: {correlation.get('confidence', 0):.0%})"
                         )
-                        sentinel_log.audit(
+                        spectre_log.audit(
                             "ATTACK_CHAIN_DETECTED",
                             correlation,
                             f"AI detected attack pattern: {correlation.get('pattern_name')}"
@@ -3501,7 +3501,7 @@ class Sentinel:
                     ai_decision = self.ai_engine.get_remediation_decision(threat_dict, system_state)
 
                     if ai_decision.get("action") != "default":
-                        sentinel_log.audit(
+                        spectre_log.audit(
                             "AI_REMEDIATION_DECISION",
                             {
                                 "threat_id": threat.threat_id,
@@ -3514,7 +3514,7 @@ class Sentinel:
 
                     # Execute remediation
                     mitigation = self.remediator.remediate_threat(threat)
-                    sentinel_log.audit(
+                    spectre_log.audit(
                         "THREAT_REMEDIATED",
                         {"threat_id": threat.threat_id, "action": mitigation.action_type.value},
                         f"Threat remediated: {mitigation.action_details}"
@@ -3523,15 +3523,15 @@ class Sentinel:
             except Empty:
                 continue
             except Exception as e:
-                sentinel_log.error(f"Threat processing error: {e}")
+                spectre_log.error(f"Threat processing error: {e}")
 
     def run(self):
         """Main daemon loop"""
-        sentinel_log.info(f"Sentinel v{kSentinelVersion} starting...")
-        sentinel_log.audit(
+        spectre_log.info(f"Spectre v{kSpectreVersion} starting...")
+        spectre_log.audit(
             "DAEMON_START",
-            {"version": kSentinelVersion},
-            "Sentinel daemon initialized"
+            {"version": kSpectreVersion},
+            "Spectre daemon initialized"
         )
 
         # Install dependencies
@@ -3539,7 +3539,7 @@ class Sentinel:
 
         # Start continuous monitors
         if self.config.get("continuous_monitoring", "enabled", default=True):
-            sentinel_log.info("Starting continuous monitoring...")
+            spectre_log.info("Starting continuous monitoring...")
             self.file_monitor.start()
             self.process_monitor.start()
             self.network_monitor.start()
@@ -3557,12 +3557,12 @@ class Sentinel:
             self.last_standard_scan = datetime.utcnow()
             self.last_quick_scan = datetime.utcnow()
         except Exception as e:
-            sentinel_log.error(f"Initial scan failed: {e}")
+            spectre_log.error(f"Initial scan failed: {e}")
 
         # Main loop
-        quick_interval = timedelta(minutes=self.config.get("sentinel", "quick_scan_interval_minutes", default=5))
-        standard_interval = timedelta(hours=self.config.get("sentinel", "standard_scan_interval_hours", default=1))
-        deep_interval = timedelta(hours=self.config.get("sentinel", "deep_scan_interval_hours", default=4))
+        quick_interval = timedelta(minutes=self.config.get("spectre", "quick_scan_interval_minutes", default=5))
+        standard_interval = timedelta(hours=self.config.get("spectre", "standard_scan_interval_hours", default=1))
+        deep_interval = timedelta(hours=self.config.get("spectre", "deep_scan_interval_hours", default=4))
 
         while self.running:
             try:
@@ -3588,18 +3588,18 @@ class Sentinel:
                 time.sleep(30)
 
             except Exception as e:
-                sentinel_log.error(f"Main loop error: {e}")
+                spectre_log.error(f"Main loop error: {e}")
                 time.sleep(60)
 
         # Shutdown
-        sentinel_log.info("Stopping monitors...")
+        spectre_log.info("Stopping monitors...")
         self.file_monitor.stop()
         self.process_monitor.stop()
         self.network_monitor.stop()
         self.auth_monitor.stop()
 
-        sentinel_log.info("Sentinel shutting down")
-        sentinel_log.audit("DAEMON_STOP", {}, "Daemon stopped")
+        spectre_log.info("Spectre shutting down")
+        spectre_log.audit("DAEMON_STOP", {}, "Daemon stopped")
 
     def _notify_watchdog(self):
         """Notify systemd watchdog"""
@@ -3620,10 +3620,10 @@ class Sentinel:
 def main():
     """Main entry point"""
     if os.geteuid() != 0:
-        print(f"{kSentinelPrefix} ERROR: Must run as root")
+        print(f"{kSpectrePrefix} ERROR: Must run as root")
         sys.exit(1)
 
-    daemon = Sentinel()
+    daemon = Spectre()
     daemon.run()
 
 if __name__ == "__main__":

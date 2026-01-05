@@ -1,14 +1,14 @@
-# Sentinel - Autonomous Security Daemon
+# Spectre - Autonomous Security Daemon
 # =============================================
-# Inspired by Apple's Sentinel/XNU kernel security philosophy
+# Inspired by Apple's Spectre/XNU kernel security philosophy
 #
-# Install: cp sentinel.service /etc/systemd/system/
+# Install: cp spectre.service /etc/systemd/system/
 #          systemctl daemon-reload
-#          systemctl enable --now sentinel
+#          systemctl enable --now spectre
 
 [Unit]
-Description=Sentinel - Autonomous Security Daemon
-Documentation=https://github.com/pentestai/sentinel
+Description=Spectre - Autonomous Security Daemon
+Documentation=https://github.com/pentestai/spectre
 After=network.target network-online.target
 Wants=network-online.target
 
@@ -18,10 +18,10 @@ StartLimitBurst=5
 
 [Service]
 Type=notify
-ExecStart=/usr/bin/python3 /opt/sentinel/daemon.py
+ExecStart=/usr/bin/python3 /opt/spectre/daemon.py
 ExecReload=/bin/kill -HUP $MAINPID
 
-# Security hardening (Sentinel philosophy: minimal attack surface)
+# Security hardening (Spectre philosophy: minimal attack surface)
 User=root
 Group=root
 NoNewPrivileges=false
@@ -47,15 +47,15 @@ WatchdogSec=300
 
 # Environment
 Environment=PYTHONUNBUFFERED=1
-Environment=SENTINEL_LOG_LEVEL=INFO
+Environment=SPECTRE_LOG_LEVEL=INFO
 
 # Working directory
-WorkingDirectory=/opt/sentinel
+WorkingDirectory=/opt/spectre
 
 # Logging
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=sentinel
+SyslogIdentifier=spectre
 
 [Install]
 WantedBy=multi-user.target

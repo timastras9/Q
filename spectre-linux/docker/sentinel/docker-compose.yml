@@ -1,19 +1,19 @@
-# Sentinel - Docker Compose Configuration
+# Spectre - Docker Compose Configuration
 # ===============================================
 # Autonomous, self-healing security daemon for Linux
 #
 # Usage:
-#   docker-compose up -d                    # Start Sentinel
-#   docker-compose logs -f sentinel  # Watch logs
-#   docker-compose exec sentinel python3 /opt/sentinel/daemon.py  # Manual scan
+#   docker-compose up -d                    # Start Spectre
+#   docker-compose logs -f spectre  # Watch logs
+#   docker-compose exec spectre python3 /opt/spectre/daemon.py  # Manual scan
 
 services:
-  sentinel:
+  spectre:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: sentinel
-    hostname: sentinel
+    container_name: spectre
+    hostname: spectre
     restart: unless-stopped
 
     # Required for security scanning
@@ -26,15 +26,15 @@ services:
     # Environment variables
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - SENTINEL_LOG_LEVEL=INFO
+      - SPECTRE_LOG_LEVEL=INFO
       - TZ=UTC
 
     # Volumes for persistence
     volumes:
-      - sentinel-data:/opt/sentinel/data
-      - sentinel-logs:/var/log/sentinel
-      - sentinel-baseline:/opt/sentinel/baseline
-      - ./config:/opt/sentinel/config:ro
+      - spectre-data:/opt/spectre/data
+      - spectre-logs:/var/log/spectre
+      - spectre-baseline:/opt/spectre/baseline
+      - ./config:/opt/spectre/config:ro
 
     # Health check
     healthcheck:
@@ -56,14 +56,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.api
-    container_name: sentinel-threat-intel
+    container_name: spectre-threat-intel
     restart: unless-stopped
     ports:
       - "8095:8095"
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     volumes:
-      - sentinel-data:/opt/sentinel/data:ro
+      - spectre-data:/opt/spectre/data:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8095/health"]
       interval: 30s
@@ -71,9 +71,9 @@ services:
       retries: 3
 
 volumes:
-  sentinel-data:
+  spectre-data:
     driver: local
-  sentinel-logs:
+  spectre-logs:
     driver: local
-  sentinel-baseline:
+  spectre-baseline:
     driver: local

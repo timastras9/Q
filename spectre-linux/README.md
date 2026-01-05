@@ -1,8 +1,8 @@
-# Sentinel Linux
+# Spectre Linux
 
 **An AI-powered, self-healing, security-first Linux distribution.**
 
-Sentinel Linux is built from scratch with security as the primary design principle. It features an autonomous security daemon powered by Claude AI that continuously monitors, detects threats, and automatically remediates vulnerabilities.
+Spectre Linux is built from scratch with security as the primary design principle. It features an autonomous security daemon powered by Claude AI that continuously monitors, detects threats, and automatically remediates vulnerabilities.
 
 ## Philosophy
 
@@ -16,10 +16,10 @@ Sentinel Linux is built from scratch with security as the primary design princip
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Sentinel Linux                           │
+│                    Spectre Linux                           │
 ├─────────────────────────────────────────────────────────────┤
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │              Sentinel Daemon (Core)                  │   │
+│  │              Spectre Daemon (Core)                  │   │
 │  │  • AI Security Engine (Claude)                       │   │
 │  │  • Real-time File/Process/Network Monitoring         │   │
 │  │  • Vulnerability Scanner                             │   │
@@ -36,7 +36,7 @@ Sentinel Linux is built from scratch with security as the primary design princip
 │  • musl libc (or glibc)                                    │
 │  • BusyBox + core utilities                                │
 │  • systemd (init)                                          │
-│  • Python 3.11+ (for Sentinel)                             │
+│  • Python 3.11+ (for Spectre)                             │
 ├─────────────────────────────────────────────────────────────┤
 │  Linux Kernel 6.x (hardened)                               │
 └─────────────────────────────────────────────────────────────┘
@@ -85,44 +85,44 @@ Sentinel Linux is built from scratch with security as the primary design princip
 
 ```bash
 # Clone the repository
-git clone https://github.com/pentestai/sentinel-linux.git
-cd sentinel-linux
+git clone https://github.com/pentestai/spectre-linux.git
+cd spectre-linux
 
 # Build the ISO
 ./scripts/build.sh
 
-# Output: iso/sentinel-linux-1.0.0.iso
+# Output: iso/spectre-linux-1.0.0.iso
 ```
 
 ## Installation
 
 1. Boot from ISO
-2. Run installer: `sentinel-install`
+2. Run installer: `spectre-install`
 3. Configure disk encryption passphrase
 4. Set Anthropic API key (optional, for AI features)
-5. Reboot into Sentinel Linux
+5. Reboot into Spectre Linux
 
 ## Configuration
 
 After installation, configure via:
 ```bash
-# Edit Sentinel config
-nano /etc/sentinel/config.json
+# Edit Spectre config
+nano /etc/spectre/config.json
 
 # View status
-sentinelctl status
+spectrectl status
 
 # View logs
-journalctl -u sentinel -f
+journalctl -u spectre -f
 
 # Manual scan
-sentinelctl scan --deep
+spectrectl scan --deep
 ```
 
 ## Directory Structure
 
 ```
-sentinel-linux/
+spectre-linux/
 ├── build/          # Build artifacts
 ├── config/         # System configuration
 ├── docs/           # Documentation
@@ -143,4 +143,4 @@ Contributions welcome! Please read CONTRIBUTING.md first.
 
 ---
 
-**Sentinel Linux** - Security that thinks for itself.
+**Spectre Linux** - Security that thinks for itself.

@@ -1,8 +1,8 @@
 #!/bin/bash
 #
-# Sentinel Linux Build Script
+# Spectre Linux Build Script
 # ===========================
-# Builds Sentinel Linux ISO from scratch
+# Builds Spectre Linux ISO from scratch
 #
 
 set -e
@@ -24,8 +24,8 @@ source "${PROJECT_ROOT}/config/build.conf"
 banner() {
     echo -e "${CYAN}"
     echo "╔═══════════════════════════════════════════════════════════╗"
-    echo "║           Sentinel Linux Build System                     ║"
-    echo "║           Version: ${SENTINEL_VERSION}                              ║"
+    echo "║           Spectre Linux Build System                     ║"
+    echo "║           Version: ${SPECTRE_VERSION}                              ║"
     echo "╚═══════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 }
@@ -54,7 +54,7 @@ check_requirements() {
 }
 
 build_in_docker() {
-    log "Building Sentinel Linux in Docker container..."
+    log "Building Spectre Linux in Docker container..."
 
     # Create build Dockerfile
     cat > "${PROJECT_ROOT}/build/Dockerfile.build" << 'DOCKERFILE'
@@ -89,14 +89,14 @@ RUN apk add --no-cache \
 WORKDIR /build
 DOCKERFILE
 
-    docker build -t sentinel-builder -f "${PROJECT_ROOT}/build/Dockerfile.build" "${PROJECT_ROOT}/build"
+    docker build -t spectre-builder -f "${PROJECT_ROOT}/build/Dockerfile.build" "${PROJECT_ROOT}/build"
 
     log "Running build container..."
     docker run --rm -it \
-        -v "${PROJECT_ROOT}:/sentinel-linux" \
+        -v "${PROJECT_ROOT}:/spectre-linux" \
         -v "${PROJECT_ROOT}/build/cache:/cache" \
-        sentinel-builder \
-        /sentinel-linux/scripts/build-internal.sh
+        spectre-builder \
+        /spectre-linux/scripts/build-internal.sh
 }
 
 main() {
@@ -109,7 +109,7 @@ main() {
     build_in_docker
 
     log "Build complete!"
-    echo -e "${GREEN}ISO available at: ${PROJECT_ROOT}/iso/sentinel-linux-${SENTINEL_VERSION}.iso${NC}"
+    echo -e "${GREEN}ISO available at: ${PROJECT_ROOT}/iso/spectre-linux-${SPECTRE_VERSION}.iso${NC}"
 }
 
 main "$@"

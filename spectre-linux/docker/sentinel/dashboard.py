@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Sentinel Interactive Dashboard
+Spectre Interactive Dashboard
 ==============================
 
 Real-time security monitoring dashboard with live alerts,
@@ -48,15 +48,15 @@ except ImportError:
     from rich.align import Align
 
 # Configuration
-LOG_PATH = Path("/var/log/sentinel/sentinel.log")
-ALERTS_PATH = Path("/var/log/sentinel/alerts.log")
+LOG_PATH = Path("/var/log/spectre/spectre.log")
+ALERTS_PATH = Path("/var/log/spectre/alerts.log")
 MAX_ALERTS = 50
 REFRESH_RATE = 0.5  # seconds
 
 console = Console()
 
 
-class SentinelDashboard:
+class SpectreDashboard:
     """Interactive security monitoring dashboard"""
 
     def __init__(self, log_path: Path = LOG_PATH, demo_mode: bool = False):
@@ -230,7 +230,7 @@ class SentinelDashboard:
     def _make_header(self) -> Panel:
         """Create header panel"""
         title = Text()
-        title.append("  SENTINEL  ", style="bold white on red")
+        title.append("  SPECTRE  ", style="bold white on red")
         title.append("  Security Dashboard  ", style="bold cyan")
 
         uptime = datetime.now() - self.stats["uptime_start"]
@@ -377,16 +377,16 @@ class SentinelDashboard:
         except KeyboardInterrupt:
             self.running = False
             console.clear()
-            console.print("[bold green]Sentinel Dashboard closed.[/]")
+            console.print("[bold green]Spectre Dashboard closed.[/]")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Sentinel Security Dashboard")
+    parser = argparse.ArgumentParser(description="Spectre Security Dashboard")
     parser.add_argument("--demo", action="store_true", help="Run in demo mode with simulated events")
-    parser.add_argument("--log", type=str, default=str(LOG_PATH), help="Path to sentinel log file")
+    parser.add_argument("--log", type=str, default=str(LOG_PATH), help="Path to spectre log file")
     args = parser.parse_args()
 
-    console.print("[bold cyan]Starting Sentinel Dashboard...[/]")
+    console.print("[bold cyan]Starting Spectre Dashboard...[/]")
 
     log_path = Path(args.log)
     if not log_path.exists() and not args.demo:
@@ -394,7 +394,7 @@ def main():
         console.print("[yellow]Starting in demo mode...[/]")
         args.demo = True
 
-    dashboard = SentinelDashboard(log_path=log_path, demo_mode=args.demo)
+    dashboard = SpectreDashboard(log_path=log_path, demo_mode=args.demo)
     dashboard.run()
 
 

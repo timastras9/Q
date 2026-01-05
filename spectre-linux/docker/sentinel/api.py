@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Sentinel - Threat Intelligence API
+Spectre - Threat Intelligence API
 ==========================================
 
 Provides REST API for threat intelligence data:
@@ -27,7 +27,7 @@ from typing import Optional, Dict, Any
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='[Sentinel-API] %(asctime)s %(levelname)s: %(message)s'
+    format='[Spectre-API] %(asctime)s %(levelname)s: %(message)s'
 )
 log = logging.getLogger(__name__)
 
@@ -100,7 +100,7 @@ class ThreatIntelHandler(BaseHTTPRequestHandler):
         """Health check endpoint"""
         self._send_json({
             "status": "healthy",
-            "service": "Sentinel Threat Intel API",
+            "service": "Spectre Threat Intel API",
             "version": "1.0.0",
             "timestamp": datetime.utcnow().isoformat()
         })
@@ -267,8 +267,8 @@ Keep response concise and actionable."""
             self._send_error(f"Analysis failed: {e}")
 
     def _handle_scans(self):
-        """List recent Sentinel scans"""
-        data_path = Path("/opt/sentinel/data")
+        """List recent Spectre scans"""
+        data_path = Path("/opt/spectre/data")
         scans = []
 
         if data_path.exists():
@@ -290,7 +290,7 @@ Keep response concise and actionable."""
 
     def _handle_stats(self):
         """Get aggregated statistics"""
-        data_path = Path("/opt/sentinel/data")
+        data_path = Path("/opt/spectre/data")
         stats = {
             "total_scans": 0,
             "total_vulnerabilities": 0,
@@ -319,7 +319,7 @@ Keep response concise and actionable."""
 def main():
     """Start the API server"""
     server = HTTPServer(('0.0.0.0', API_PORT), ThreatIntelHandler)
-    log.info(f"Sentinel Threat Intel API starting on port {API_PORT}")
+    log.info(f"Spectre Threat Intel API starting on port {API_PORT}")
 
     try:
         server.serve_forever()
