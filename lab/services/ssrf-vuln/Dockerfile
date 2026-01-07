@@ -154,7 +154,7 @@ def webhook():
 
     try:
         # Simulate webhook by fetching the callback URL
-        resp = requests.post(callback, json={'event': 'test', 'data': 'pentestai'}, timeout=5)
+        resp = requests.post(callback, json={'event': 'test', 'data': 'q'}, timeout=5)
         return jsonify({
             'callback': callback,
             'status': resp.status_code,

@@ -261,8 +261,8 @@ ID=spectre
 ID_LIKE=alpine
 VERSION_ID=${SPECTRE_VERSION}
 PRETTY_NAME="Spectre Linux ${SPECTRE_VERSION} (${SPECTRE_CODENAME})"
-HOME_URL="https://github.com/pentestai/spectre-linux"
-BUG_REPORT_URL="https://github.com/pentestai/spectre-linux/issues"
+HOME_URL="https://github.com/spectre-sec/spectre-linux"
+BUG_REPORT_URL="https://github.com/spectre-sec/spectre-linux/issues"
 OSRELEASE
 
     # Create issue banner
@@ -291,7 +291,7 @@ Quick Start:
   spectrectl scan      - Run manual security scan
   spectrectl config    - Edit configuration
 
-Documentation: https://github.com/pentestai/spectre-linux
+Documentation: https://github.com/spectre-sec/spectre-linux
 
 MOTD
 

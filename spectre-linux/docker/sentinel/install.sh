@@ -4,7 +4,7 @@
 # Installs Spectre on Linux (Alpine, Rocky, Debian/Ubuntu)
 #
 # Usage:
-#   curl -sSL https://raw.githubusercontent.com/pentestai/spectre/main/install.sh | sudo bash
+#   curl -sSL https://raw.githubusercontent.com/spectre-sec/spectre/main/install.sh | sudo bash
 #   or
 #   sudo ./install.sh
 

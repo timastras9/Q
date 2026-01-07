@@ -13,9 +13,9 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/lib/pq"
-	"pentestai/internal/exploit"
-	"pentestai/internal/recon"
-	"pentestai/internal/webapp"
+	"q/internal/exploit"
+	"q/internal/recon"
+	"q/internal/webapp"
 )
 
 // AutoRunner executes autonomous penetration tests

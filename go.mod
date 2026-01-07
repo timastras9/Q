@@ -1,4 +1,4 @@
-module pentestai
+module q
 
 go 1.25.1
 

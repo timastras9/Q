@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"pentestai/internal/exploit"
+	"q/internal/exploit"
 )
 
 // AutoPentester runs autonomous penetration tests guided by AI

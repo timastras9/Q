@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"pentestai/internal/exploit"
-	"pentestai/internal/recon"
-	"pentestai/internal/webapp"
+	"q/internal/exploit"
+	"q/internal/recon"
+	"q/internal/webapp"
 )
 
 type Report struct {

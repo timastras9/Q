@@ -33,7 +33,7 @@ func HashPassword(password, salt string) string {
 // GenerateSalt creates a deterministic salt based on username and service
 // This ensures the same credential always produces the same hash for deduplication
 func GenerateSalt(username, service, target string) string {
-	data := fmt.Sprintf("pentestai:%s:%s:%s", username, service, target)
+	data := fmt.Sprintf("q:%s:%s:%s", username, service, target)
 	hash := sha256.Sum256([]byte(data))
 	return hex.EncodeToString(hash[:8]) // Use first 8 bytes as salt
 }

@@ -7,7 +7,7 @@
 
 FROM almalinux:9
 
-LABEL maintainer="PentestAI"
+LABEL maintainer="Spectre Security"
 LABEL description="Sentinel Linux Test Environment"
 LABEL version="1.0.0"
 
@@ -218,8 +218,8 @@ ID=sentinel
 ID_LIKE=rhel
 VERSION_ID=1.0.0
 PRETTY_NAME="Sentinel Linux 1.0.0 (guardian)"
-HOME_URL="https://github.com/pentestai/sentinel-linux"
-BUG_REPORT_URL="https://github.com/pentestai/sentinel-linux/issues"
+HOME_URL="https://github.com/spectre-sec/sentinel-linux"
+BUG_REPORT_URL="https://github.com/spectre-sec/sentinel-linux/issues"
 OSRELEASE
 
 # Create MOTD

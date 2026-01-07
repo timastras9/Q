@@ -20,12 +20,12 @@ import (
 	"sync"
 	"time"
 
-	"pentestai/internal/ai"
-	"pentestai/internal/exploit"
-	"pentestai/internal/recon"
-	"pentestai/internal/report"
-	"pentestai/internal/storage"
-	"pentestai/internal/webapp"
+	"q/internal/ai"
+	"q/internal/exploit"
+	"q/internal/recon"
+	"q/internal/report"
+	"q/internal/storage"
+	"q/internal/webapp"
 )
 
 type Server struct {
@@ -130,7 +130,7 @@ func (s *Server) Run() {
 		protocol = "https"
 	}
 
-	log.Printf("[*] PentestAI API server starting on %s://0.0.0.0:%s", protocol, s.port)
+	log.Printf("[*] Q API server starting on %s://0.0.0.0:%s", protocol, s.port)
 	log.Printf("[*] Endpoints:")
 	log.Printf("    POST /api/scan        - Start a scan")
 	log.Printf("    GET  /api/scan/{id}   - Get scan status/results")
@@ -212,15 +212,15 @@ func (s *Server) ensureCertificates() error {
 	template := x509.Certificate{
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
-			Organization: []string{"PentestAI"},
-			CommonName:   "PentestAI API Server",
+			Organization: []string{"Q"},
+			CommonName:   "Q API Server",
 		},
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().Add(365 * 24 * time.Hour), // Valid for 1 year
 		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
-		DNSNames:              []string{"localhost", "pentestai", "api.pentestai.local"},
+		DNSNames:              []string{"localhost", "q", "api.q.local"},
 		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("0.0.0.0")},
 	}
 
@@ -284,7 +284,7 @@ func (s *Server) corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	s.jsonResponse(w, ScanResponse{
 		Success: true,
-		Message: "PentestAI API is running",
+		Message: "Q API is running",
 		Data: map[string]interface{}{
 			"version":    "1.0.0",
 			"ai_enabled": s.aiClient != nil,

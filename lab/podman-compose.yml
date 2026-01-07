@@ -6,7 +6,7 @@ version: "3.8"
 
 services:
   # ============================================
-  # ATTACKER BOX - Run pentestai from here
+  # ATTACKER BOX - Run q from here
   # ============================================
   attacker:
     image: golang:1.21-alpine
@@ -19,7 +19,7 @@ services:
       - ../:/app:ro
       - attacker_home:/root
     working_dir: /app
-    command: sh -c "apk add --no-cache nmap curl git && cp /app/pentestai /root/pentestai && chmod +x /root/pentestai && tail -f /dev/null"
+    command: sh -c "apk add --no-cache nmap curl git && cp /app/q /root/q && chmod +x /root/q && tail -f /dev/null"
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     tty: true

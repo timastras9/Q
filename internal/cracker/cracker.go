@@ -1,4 +1,4 @@
-// Package cracker provides password cracking capabilities for pentestai
+// Package cracker provides password cracking capabilities for Q
 // Supports multiple hash types, brute force, dictionary attacks, and rule-based attacks
 package cracker
 

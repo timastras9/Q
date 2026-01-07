@@ -1,7 +1,7 @@
 # Binaries
-pentestai
-pentestai-linux
-pentestai-darwin
+q
+q-linux
+q-darwin
 stripe-checkout-linux
 *.exe
 
@@ -36,3 +36,5 @@ wordlists/*.gz
 
 # MCP server config (may contain paths)
 .mcp.json
+pentestai
+pentestai-linux

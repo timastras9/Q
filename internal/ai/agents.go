@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"pentestai/internal/exploit"
-	"pentestai/internal/recon"
+	"q/internal/exploit"
+	"q/internal/recon"
 )
 
 // BaseAgent provides common functionality for all agents

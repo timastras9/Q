@@ -1987,7 +1987,7 @@ func (s *MCPServer) handleRequest(req JSONRPCRequest) JSONRPCResponse {
 					"tools": map[string]interface{}{},
 				},
 				"serverInfo": map[string]interface{}{
-					"name":    "pentestai-mcp",
+					"name":    "q-mcp",
 					"version": "1.0.0",
 				},
 			},

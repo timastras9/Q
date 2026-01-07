@@ -1,4 +1,4 @@
-module pentestai-mcp
+module q-mcp
 
 go 1.24.0
 

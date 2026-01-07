@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
-	"pentestai/cmd/console"
-	"pentestai/cmd/server"
+	"q/cmd/console"
+	"q/cmd/server"
 )
 
 var version = "1.0.0"
@@ -24,7 +24,7 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("PentestAI v%s\n", version)
+		fmt.Printf("Q v%s\n", version)
 		os.Exit(0)
 	}
 
@@ -53,10 +53,10 @@ func main() {
 
 func printHelp() {
 	help := `
-PentestAI - AI-Powered Penetration Testing Framework
+Q - AI-Powered Penetration Testing Toolkit
 
 Usage:
-  pentestai [options]
+  q [options]
 
 Options:
   --help       Show this help message
@@ -72,15 +72,15 @@ Environment Variables:
   TLS_KEY              Path to TLS private key file (default: /opt/data/certs/server.key)
 
 Examples:
-  pentestai                     Start interactive console
-  pentestai --server            Start HTTP API server on port 8081
-  pentestai --server --port 9000  Start API on port 9000
+  q                     Start interactive console
+  q --server            Start HTTP API server on port 8081
+  q --server --port 9000  Start API on port 9000
 
   # Enable HTTPS with auto-generated self-signed certificate:
-  TLS_ENABLED=true pentestai --server --port 443
+  TLS_ENABLED=true q --server --port 443
 
   # Use custom certificates:
-  TLS_ENABLED=true TLS_CERT=/path/cert.pem TLS_KEY=/path/key.pem pentestai --server
+  TLS_ENABLED=true TLS_CERT=/path/cert.pem TLS_KEY=/path/key.pem q --server
 
 API Endpoints (server mode):
   POST /api/scan         - Start a scan (async)

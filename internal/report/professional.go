@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"pentestai/internal/audit"
-	"pentestai/internal/evidence"
-	"pentestai/internal/remediation"
-	"pentestai/internal/safe"
+	"q/internal/audit"
+	"q/internal/evidence"
+	"q/internal/remediation"
+	"q/internal/safe"
 )
 
 // ProfessionalReport is an executive-quality penetration test report

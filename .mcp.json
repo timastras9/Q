@@ -1,9 +1,17 @@
 {
   "mcpServers": {
-    "pentestai": {
-      "command": "/Users/tim/pen_test_ai/mcp/pentestai-mcp",
+    "q": {
+      "command": "/Users/tim/pen_test_ai/mcp/q-mcp",
       "args": [],
       "env": {}
+    },
+    "m": {
+      "command": "python",
+      "args": ["-m", "m_server"],
+      "cwd": "/Users/tim/pen_test_ai/spectre/m-server",
+      "env": {
+        "LLM_PROVIDER": "anthropic"
+      }
     }
   }
 }

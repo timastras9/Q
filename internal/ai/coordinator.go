@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"pentestai/internal/exploit"
+	"q/internal/exploit"
 )
 
 // AgentType identifies the type of agent

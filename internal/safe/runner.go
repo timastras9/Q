@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"pentestai/internal/audit"
-	"pentestai/internal/config"
-	"pentestai/internal/evidence"
-	"pentestai/internal/remediation"
+	"q/internal/audit"
+	"q/internal/config"
+	"q/internal/evidence"
+	"q/internal/remediation"
 )
 
 // Finding represents a security finding

@@ -8,7 +8,7 @@
 
 [Unit]
 Description=Spectre - Autonomous Security Daemon
-Documentation=https://github.com/pentestai/spectre
+Documentation=https://github.com/spectre-sec/spectre
 After=network.target network-online.target
 Wants=network-online.target
 

@@ -14,12 +14,12 @@ import (
 	"syscall"
 	"time"
 
-	"pentestai/internal/ai"
-	"pentestai/internal/exploit"
-	"pentestai/internal/recon"
-	"pentestai/internal/remediation"
-	"pentestai/internal/util"
-	"pentestai/internal/webapp"
+	"q/internal/ai"
+	"q/internal/exploit"
+	"q/internal/recon"
+	"q/internal/remediation"
+	"q/internal/util"
+	"q/internal/webapp"
 )
 
 const (
@@ -124,11 +124,11 @@ func (c *Console) printBanner() {
 func (c *Console) getPrompt() string {
 	if c.currentModule != nil {
 		info := c.currentModule.Info()
-		return fmt.Sprintf("%spentestai%s %s(%s%s%s)%s > ",
+		return fmt.Sprintf("%sq%s %s(%s%s%s)%s > ",
 			colorBold+colorRed, colorReset,
 			colorReset, colorRed, info.Name, colorReset, colorReset)
 	}
-	return fmt.Sprintf("%spentestai%s > ", colorBold+colorRed, colorReset)
+	return fmt.Sprintf("%sq%s > ", colorBold+colorRed, colorReset)
 }
 
 func (c *Console) execute(line string) {

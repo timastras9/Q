@@ -85,7 +85,7 @@ Spectre Linux is built from scratch with security as the primary design principl
 
 ```bash
 # Clone the repository
-git clone https://github.com/pentestai/spectre-linux.git
+git clone https://github.com/spectre-sec/spectre-linux.git
 cd spectre-linux
 
 # Build the ISO
