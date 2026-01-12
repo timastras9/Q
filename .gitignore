@@ -1,7 +1,10 @@
 # Binaries
 q
+Q
 q-linux
 q-darwin
+Q-linux
+Q-darwin
 stripe-checkout-linux
 *.exe
 
@@ -36,5 +39,19 @@ wordlists/*.gz
 
 # MCP server config (may contain paths)
 .mcp.json
+
+# Old binaries (archived)
 pentestai
 pentestai-linux
+mcp-server
+
+# Archive folder
+.archive/
+
+# Node modules (never track)
+node_modules/
+**/node_modules/
+
+# MCP binaries
+mcp/mcp-server
+mcp/pentestai-mcp
