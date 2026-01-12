@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "q": {
-      "command": "/Users/tim/pen_test_ai/mcp/q-mcp",
+      "command": "/Users/tim/pen_test_ai/mcp/q",
       "args": [],
       "env": {}
     },
